@@ -1,0 +1,4075 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1020">
+  <meta name="description" content="Liquid Glass navigation with 3D maps, smooth driving camera, speed limits and turn-by-turn routing.">
+  <title>Glassway Navigation</title>
+
+  <!-- Installable app (PWA): manifest, icons and iOS home-screen tags -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="MapNav">
+  <meta name="application-name" content="MapNav">
+
+  <!-- MapLibre GL JS: open-source 3D vector map renderer -->
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+
+<style>
+/* ==========================================================================
+   Glassway — Liquid Glass UI
+   Theme tokens live on :root; [data-theme] on <html> is set by the JS
+   (day/night follows the sun, or the user's choice in Settings).
+   ========================================================================== */
+:root {
+  --gutter: 16px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --radius: 22px;
+  --radius-sm: 14px;
+  --blur: 16px;
+  --sat: 180%;
+  --font: "SF Pro Display", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* Light (day) glass */
+  --glass-bg: rgba(255, 255, 255, 0.42);
+  --glass-bg-strong: rgba(255, 255, 255, 0.74);
+  --glass-border: rgba(255, 255, 255, 0.55);
+  --glass-edge: rgba(255, 255, 255, 0.85);
+  --glass-shadow: 0 8px 32px rgba(15, 23, 42, 0.18), 0 2px 6px rgba(15, 23, 42, 0.08);
+  --glass-tint: rgba(255, 255, 255, 0.10);
+  --text: #0b1220;
+  --text-dim: rgba(11, 18, 32, 0.62);
+  --hover: rgba(255, 255, 255, 0.45);
+  --accent: #0ea5e9;
+  --accent-2: #8b5cf6;
+  --danger: #ef4444;
+  --ok: #22c55e;
+  --eta: #15803d;
+  --body-bg: #e9edf3;
+}
+:root[data-theme="dark"] {
+  --glass-bg: rgba(18, 24, 38, 0.62);
+  --glass-bg-strong: rgba(18, 24, 38, 0.86);
+  --glass-border: rgba(255, 255, 255, 0.16);
+  --glass-edge: rgba(255, 255, 255, 0.28);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --glass-tint: rgba(120, 160, 255, 0.05);
+  --text: #f1f5ff;
+  --text-dim: rgba(226, 232, 255, 0.62);
+  --hover: rgba(255, 255, 255, 0.08);
+  --accent: #38bdf8;
+  --accent-2: #a78bfa;
+  --eta: #4ade80;
+  --body-bg: #0b1020;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--body-bg);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+button, input, select { font: inherit; color: inherit; }
+.hidden { display: none !important; }
+.muted { color: var(--text-dim); }
+.small { font-size: 12px; line-height: 1.5; }
+#map { position: fixed; inset: 0; }
+
+.ico {
+  width: 22px; height: 22px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* ==========================================================================
+   The Liquid Glass material
+   ========================================================================== */
+.glass {
+  position: relative;
+  background: linear-gradient(135deg, var(--glass-tint), transparent 60%), var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(var(--sat));
+  backdrop-filter: blur(var(--blur)) saturate(var(--sat));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-edge), inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+  isolation: isolate;
+}
+/* Static sheen across the top of each pane */
+.glass::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; z-index: -1; pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0) 38%);
+}
+/* Pointer-following specular highlight (desktop only; coordinates set by JS) */
+.glass::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; z-index: -1; pointer-events: none;
+  background: radial-gradient(220px circle at var(--mx, 50%) var(--my, -40%), rgba(255, 255, 255, 0.28), transparent 60%);
+  opacity: 0; transition: opacity .25s ease;
+}
+@media (hover: hover) { .glass:hover::after { opacity: 1; } }
+@media (hover: none) { .glass::after { display: none; } }
+
+/* ---------- Buttons ---------- */
+.icon-btn {
+  display: inline-grid; place-items: center;
+  width: 44px; height: 44px;
+  border: 0; border-radius: 14px;
+  background: transparent; cursor: pointer;
+  transition: background .2s, transform .15s, color .2s;
+}
+@media (hover: hover) { .icon-btn:hover { background: var(--hover); } }
+.icon-btn:active { transform: scale(.92); }
+.icon-btn.small { width: 32px; height: 32px; }
+.icon-btn.small .ico { width: 18px; height: 18px; }
+.icon-btn.active { color: var(--accent); background: var(--hover); }
+.text-btn { font-weight: 800; font-size: 13px; letter-spacing: .4px; }
+.icon-btn:focus-visible, .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.pill {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 44px; padding: 0 18px;
+  border-radius: 999px; border: 1px solid var(--glass-border);
+  background: var(--hover); font-weight: 600; cursor: pointer;
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+  transition: transform .15s, filter .2s;
+}
+.pill:hover { filter: brightness(1.08); }
+.pill:active { transform: scale(.96); }
+.pill:disabled { opacity: .45; cursor: default; }
+.pill .ico { width: 18px; height: 18px; }
+.pill.primary {
+  color: #fff; border-color: rgba(255,255,255,.35);
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 6px 20px rgba(56, 189, 248, .35), inset 0 1px 0 rgba(255,255,255,.5);
+}
+.pill.danger {
+  color: #fff; border-color: rgba(255,255,255,.3);
+  background: linear-gradient(135deg, #f43f5e, #ef4444);
+  box-shadow: 0 6px 18px rgba(239, 68, 68, .35), inset 0 1px 0 rgba(255,255,255,.45);
+}
+.pill.tiny { min-height: 34px; padding: 0 14px; font-size: 13px; }
+
+/* ==========================================================================
+   Top stack: search bar + navigation banner
+   ========================================================================== */
+#top-stack {
+  position: fixed; z-index: 20;
+  top: calc(var(--gutter) + var(--safe-top));
+  left: 50%; transform: translateX(-50%);
+  width: min(760px, calc(100% - 2 * var(--gutter)));
+  display: flex; flex-direction: column; gap: 10px;
+  pointer-events: none;
+}
+#top-stack > * { pointer-events: auto; }
+
+#topbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 6px 6px 16px; min-height: 60px;
+  transition: margin-top .35s ease, opacity .35s ease;
+}
+#topbar.tucked { opacity: 0; pointer-events: none; }
+.search-wrap { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.search-wrap .ico { opacity: .7; }
+#search-input {
+  flex: 1; min-width: 0; height: 46px;
+  border: 0; outline: 0; background: transparent;
+  font-size: 17px; font-weight: 500;
+}
+#search-input::placeholder { color: var(--text-dim); }
+#search-input::-webkit-search-cancel-button { display: none; }
+
+.gps-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 12px;
+  border-radius: 999px; border: 1px solid var(--glass-border);
+  background: var(--hover); cursor: pointer;
+  font-size: 12px; font-weight: 700; letter-spacing: .3px; white-space: nowrap;
+}
+.bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+.bars i { display: block; width: 3px; border-radius: 2px; background: currentColor; opacity: .25; }
+.bars i:nth-child(1) { height: 4px; } .bars i:nth-child(2) { height: 7px; }
+.bars i:nth-child(3) { height: 10px; } .bars i:nth-child(4) { height: 14px; }
+.bars[data-level="1"] i:nth-child(-n+1), .bars[data-level="2"] i:nth-child(-n+2),
+.bars[data-level="3"] i:nth-child(-n+3), .bars[data-level="4"] i:nth-child(-n+4) { opacity: 1; }
+.gps-chip.good { color: var(--ok); }
+.gps-chip.fair { color: #eab308; }
+.gps-chip.poor { color: var(--danger); }
+.gps-chip.sim  { color: var(--accent-2); }
+
+#search-results {
+  position: absolute; top: calc(100% + 8px); left: 0; right: 0;
+  margin: 0; padding: 6px; list-style: none;
+  max-height: 50vh; overflow-y: auto;
+  background: var(--glass-bg-strong);
+}
+#search-results li { display: flex; gap: 12px; align-items: center; padding: 11px 12px; border-radius: var(--radius-sm); cursor: pointer; }
+#search-results li:hover { background: var(--hover); }
+.r-text { min-width: 0; flex: 1; }
+.r-title { font-weight: 600; }
+.r-sub { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-dist { font-size: 12px; color: var(--text-dim); }
+#search-results li.results-head {
+  justify-content: space-between; padding: 6px 6px 4px 12px; cursor: default;
+  font-size: 11px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: .8px;
+}
+#search-results li.results-head:hover { background: transparent; }
+.clear-history {
+  border: 0; background: transparent; cursor: pointer;
+  padding: 6px 10px; border-radius: 10px;
+  color: var(--accent); font-size: 12px; font-weight: 700; text-transform: none; letter-spacing: 0;
+}
+.clear-history:hover { background: var(--hover); }
+#search-results li.history .ico { opacity: .6; }
+
+/* ---------- Navigation banner ---------- */
+#nav-banner { padding: 14px 16px; overflow: hidden; }
+.nav-main { display: flex; align-items: center; gap: 14px; }
+.turn-icon {
+  flex: none; width: 64px; height: 64px; border-radius: 18px;
+  display: grid; place-items: center; color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 6px 22px rgba(56, 189, 248, .45), inset 0 1px 0 rgba(255,255,255,.5);
+}
+.turn-icon svg, #then-svg { width: 44px; height: 44px; fill: none; stroke: currentColor; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.nav-text { min-width: 0; }
+.nav-distance { font-size: 34px; font-weight: 800; line-height: 1.05; letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
+.nav-instruction { font-size: 17px; font-weight: 600; color: var(--text-dim); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.nav-instruction strong { color: var(--text); font-weight: 800; }
+/* Fills up over the last 400 m before the maneuver */
+.nav-progress { height: 4px; margin-top: 12px; border-radius: 999px; background: var(--hover); overflow: hidden; }
+.nav-progress i { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); box-shadow: 0 0 10px var(--accent); }
+.nav-then { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--glass-border); font-size: 13px; font-weight: 600; color: var(--text-dim); }
+.nav-then #then-svg { width: 22px; height: 22px; stroke-width: 5; }
+
+/* ==========================================================================
+   Floating controls (right): recenter, camera modes, theme, audio, sim
+   ========================================================================== */
+#map-controls {
+  position: fixed; z-index: 15;
+  right: var(--gutter); top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px; border-radius: 22px;
+}
+.ctrl-sep { width: 60%; height: 1px; margin: 4px 0; background: var(--glass-border); }
+.cam-modes { display: flex; flex-direction: column; gap: 2px; padding: 3px; border-radius: 16px; background: var(--hover); }
+.cam-modes .icon-btn { width: 46px; height: 38px; border-radius: 12px; font-size: 12px; }
+.cam-modes .icon-btn.active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 4px 14px rgba(56, 189, 248, .4), inset 0 1px 0 rgba(255,255,255,.5);
+}
+#btn-recenter.off { color: var(--accent); animation: nudge 2s ease-in-out infinite; }
+@keyframes nudge { 50% { background: var(--hover); } }
+#btn-sim.active { color: var(--accent-2); }
+#btn-cam-cycle { display: none; }
+
+/* ==========================================================================
+   Cockpit (bottom-left on desktop): trip bar stacked on the speed dashboard
+   ========================================================================== */
+#cockpit {
+  position: fixed; z-index: 15;
+  left: var(--gutter); bottom: calc(28px + var(--safe-bottom));
+  display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+  max-width: min(640px, calc(100% - 2 * var(--gutter) - 90px));
+}
+#dash {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 18px 14px 22px;
+  border-radius: 30px;
+  transition: box-shadow .3s, border-color .3s;
+}
+.dash-speed { display: flex; flex-direction: column; align-items: center; min-width: 92px; }
+#speed-value {
+  font-size: clamp(46px, 4vw, 64px); font-weight: 800; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: -2px;
+  transition: color .3s;
+}
+.dash-speed .unit { font-size: 12px; font-weight: 700; color: var(--text-dim); letter-spacing: 1px; text-transform: uppercase; }
+.dash-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; padding-left: 4px; }
+.dash-street { font-size: 16px; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 280px; }
+
+/* Trip bar: large, high-contrast ETA / time / distance while navigating */
+#trip-bar {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: center;
+  min-width: 440px; padding: 12px 12px 12px 6px; border-radius: 28px;
+  background: linear-gradient(135deg, var(--glass-tint), transparent 60%), var(--glass-bg-strong);
+}
+.trip-cell { display: flex; flex-direction: column; align-items: center; min-width: 0; padding: 0 8px; }
+.trip-cell + .trip-cell { border-left: 1px solid var(--glass-border); }
+.trip-cell b {
+  font-size: clamp(28px, 2.8vw, 40px); font-weight: 800; line-height: 1; letter-spacing: -1px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.trip-cell b small { margin-left: 3px; font-size: .46em; font-weight: 700; letter-spacing: 0; color: var(--text-dim); }
+.trip-cell.eta b { color: var(--eta); }
+.trip-cell > span { margin-top: 6px; font-size: 11px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: .8px; }
+.end-btn { min-height: 50px; margin-left: 6px; padding: 0 20px; font-size: 16px; font-weight: 800; }
+
+#dash.overspeed {
+  border-color: rgba(239, 68, 68, .75);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, .55), 0 0 42px rgba(239, 68, 68, .55), var(--glass-shadow),
+              inset 0 1px 0 rgba(255, 180, 180, .8), inset 0 0 30px rgba(239, 68, 68, .25);
+  animation: overspeed 1s ease-in-out infinite;
+}
+#dash.overspeed #speed-value { color: var(--danger); }
+@keyframes overspeed { 50% { box-shadow: 0 0 0 2px rgba(239,68,68,.8), 0 0 60px rgba(239,68,68,.75), var(--glass-shadow), inset 0 0 40px rgba(239,68,68,.35); } }
+
+/* European style circular speed-limit sign */
+.limit-sign {
+  flex: none; width: 68px; height: 68px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: #fff; color: #111;
+  border: 7px solid #e11d2a;
+  box-shadow: 0 4px 14px rgba(0,0,0,.3), inset 0 2px 4px rgba(0,0,0,.15);
+  font-weight: 800; font-size: 25px; letter-spacing: -1px; font-variant-numeric: tabular-nums;
+}
+.limit-sign.wide span { font-size: 21px; }
+.limit-sign.unknown { border-color: #94a3b8; color: #94a3b8; opacity: .8; }
+.limit-sign.none { border: 3px solid #111; background: repeating-linear-gradient(135deg, #fff 0 7px, #111 7px 9px, #fff 9px 14px); }
+.limit-sign.none span { display: none; }
+.limit-sign.bump { animation: bump .5s ease; }
+@keyframes bump { 40% { transform: scale(1.15); } }
+
+/* ==========================================================================
+   Sheets, drawers, modals
+   ========================================================================== */
+.sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.sheet-head h2 { margin: 2px 0 0; font-size: 20px; line-height: 1.25; }
+.eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); font-weight: 700; }
+.sheet-actions { display: flex; gap: 10px; margin-top: 14px; }
+.sheet-actions .pill { flex: 1; }
+
+.sheet {
+  position: fixed; z-index: 30;
+  left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--gutter) + var(--safe-bottom));
+  width: min(480px, calc(100% - 2 * var(--gutter)));
+  padding: 16px;
+  background: linear-gradient(135deg, var(--glass-tint), transparent 60%), var(--glass-bg-strong);
+  animation: sheetIn .35s cubic-bezier(.2,.9,.3,1.1);
+}
+@keyframes sheetIn { from { opacity: 0; transform: translate(-50%, 20px); } }
+.route-options { display: flex; flex-direction: column; gap: 8px; }
+.route-opt {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border); background: transparent; cursor: pointer; text-align: left;
+}
+.route-opt:hover { background: var(--hover); }
+.route-opt.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 30%, transparent); }
+.ro-time { font-size: 20px; font-weight: 800; }
+.ro-meta { font-size: 13px; color: var(--text-dim); }
+.ro-tag { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: var(--accent); color: #fff; }
+
+.modal {
+  position: fixed; inset: 0; z-index: 50;
+  display: grid; place-items: center; padding: var(--gutter);
+  background: rgba(5, 10, 20, .35);
+  animation: fade .25s ease;
+}
+@keyframes fade { from { opacity: 0; } }
+.dialog {
+  width: min(460px, 100%); padding: 22px;
+  background: linear-gradient(135deg, var(--glass-tint), transparent 60%), var(--glass-bg-strong);
+  animation: pop .3s cubic-bezier(.2,.9,.3,1.2);
+}
+@keyframes pop { from { opacity: 0; transform: scale(.94); } }
+.perm { text-align: center; }
+.perm h2 { margin: 12px 0 6px; }
+.perm p { color: var(--text-dim); line-height: 1.5; margin: 0; }
+.perm-orb {
+  width: 72px; height: 72px; margin: 4px auto 0; border-radius: 50%;
+  display: grid; place-items: center; color: #fff;
+  background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.6), transparent 50%), linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 40px rgba(56,189,248,.55), inset 0 1px 0 rgba(255,255,255,.6);
+}
+.perm-orb .ico { width: 32px; height: 32px; }
+
+.drawer {
+  position: fixed; z-index: 40;
+  top: calc(var(--gutter) + var(--safe-top)); right: var(--gutter);
+  bottom: calc(var(--gutter) + var(--safe-bottom));
+  width: min(400px, calc(100% - 2 * var(--gutter)));
+  display: flex; flex-direction: column;
+  padding: 16px 8px 8px 16px;
+  background: linear-gradient(135deg, var(--glass-tint), transparent 60%), var(--glass-bg-strong);
+  animation: drawerIn .35s cubic-bezier(.2,.9,.3,1.05);
+}
+@keyframes drawerIn { from { opacity: 0; transform: translateX(30px); } }
+.drawer .sheet-head { padding-right: 8px; }
+.drawer-body { overflow-y: auto; padding-right: 8px; user-select: text; }
+.set-group { padding: 12px 0; border-top: 1px solid var(--glass-border); }
+.set-group h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); }
+#btn-install { width: 100%; margin-top: 4px; }
+.install-steps { margin: 10px 0 0; padding-left: 22px; line-height: 1.7; }
+.install-steps b { color: var(--text); }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 46px; font-size: 15px; }
+.row select { max-width: 55%; height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--glass-border); background: var(--hover); outline: none; }
+.row select option { color: #111; }
+.row input[type="range"] { width: 45%; accent-color: var(--accent); }
+
+.switch {
+  appearance: none; -webkit-appearance: none;
+  flex: none; width: 50px; height: 30px; border-radius: 999px; cursor: pointer;
+  position: relative; margin: 0;
+  background: rgba(127, 127, 127, .35);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,.2);
+  transition: background .25s;
+}
+.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: linear-gradient(180deg, #fff, #e8ecf3);
+  box-shadow: 0 2px 6px rgba(0,0,0,.3);
+  transition: transform .25s cubic-bezier(.3,1.4,.5,1);
+}
+.switch:checked { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.switch:checked::after { transform: translateX(20px); }
+
+.gps-panel { display: flex; gap: 16px; align-items: center; }
+.gps-ring { flex: none; position: relative; width: 84px; height: 84px; border-radius: 50%; border: 1px dashed var(--glass-border); background: radial-gradient(circle, rgba(56,189,248,.12), transparent 70%); }
+.gps-ring::after { content: ""; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+#gps-ring-dot { position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; border-radius: 50%; transform: translate(-50%, -50%); background: rgba(56,189,248,.18); border: 1px solid rgba(56,189,248,.6); transition: width .5s, height .5s; }
+.gps-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin: 0; flex: 1; }
+.gps-stats div.wide { grid-column: span 2; }
+.gps-stats dt { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .6px; }
+.gps-stats dd { margin: 0; font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   Map markers
+   ========================================================================== */
+.car-marker { width: 100px; height: 240px; pointer-events: none; }
+/* --car-scale grows the car toward real-world size when zoomed in (set per frame) */
+.car-svg {
+  width: 100px; height: 240px; overflow: visible;
+  transform: scale(var(--car-scale, 1));
+  filter: drop-shadow(0 0 6px rgba(59, 130, 246, .55));
+}
+/* Headlight beams, rear road glow and LED taillights only at night (or when braking) */
+.night-fx { opacity: 0; transition: opacity .8s ease; }
+:root[data-theme="dark"] .night-fx { opacity: 1; }
+.car-marker.braking .tail-leds, .car-marker.braking .tail-glow { opacity: 1; }
+:root[data-theme="dark"] .car-marker.braking .tail-glow { transform: scale(1.35); }
+.tail-glow { transform-box: view-box; transform-origin: 50px 150px; transition: opacity .25s, transform .25s; }
+/* Beams stretch with speed (--beam set per frame), pivoting at the headlights */
+.beams { transform-box: view-box; transform-origin: 50px 98px; transform: scaleY(var(--beam, 1)); }
+/* Destination beacon: pulsing light pillar standing on the map (fixed pixel size, so visible
+   zoomed out). Fixed light-blue → soft-violet palette: no theme or arrival colour changes. */
+.dest-beacon { --beacon-blue: #8ad8ff; --beacon-violet: #b9a8ff; width: 64px; height: 160px; pointer-events: none; }
+.dest-beacon .beam {
+  position: absolute; left: 50%; bottom: 8px; width: 18px; height: 150px; margin-left: -9px;
+  border-radius: 9px 9px 50% 50%; transform-origin: bottom;
+  background: linear-gradient(to top, #e9f8ff, var(--beacon-blue) 16%, color-mix(in srgb, var(--beacon-violet) 62%, transparent) 58%, transparent);
+  filter: blur(3px);
+  animation: beamPulse 2.2s ease-in-out infinite;
+}
+.dest-beacon .beam::after {
+  content: ""; position: absolute; left: 50%; bottom: 0; width: 4px; height: 100%; margin-left: -2px; border-radius: 2px;
+  background: linear-gradient(to top, #fff, transparent 85%);
+}
+.dest-beacon .core {
+  position: absolute; left: 50%; bottom: 2px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%;
+  background: radial-gradient(circle, #fff 0 30%, var(--beacon-blue) 62%, var(--beacon-violet));
+  box-shadow: 0 0 18px 6px color-mix(in srgb, var(--beacon-blue) 55%, var(--beacon-violet));
+}
+.dest-beacon .ring {
+  position: absolute; left: 50%; bottom: -6px; width: 64px; height: 22px; margin-left: -32px; border-radius: 50%;
+  border: 2px solid var(--beacon-blue); box-shadow: 0 0 12px var(--beacon-violet), inset 0 0 8px var(--beacon-blue);
+  animation: ringPulse 2.2s ease-out infinite;
+}
+.dest-beacon .ring.r2 { animation-delay: 1.1s; }
+.beacon-inner { position: absolute; inset: 0; transform-origin: 50% 100%; transition: opacity 1.6s ease, transform 1.6s cubic-bezier(.4, 0, .2, 1); }
+/* Arrival: same colours, a slightly quicker pulse… */
+.dest-beacon.arrived .beam { animation-duration: 1.3s; }
+.dest-beacon.arrived .ring { animation-duration: 1.4s; }
+/* …then a graceful fade + shrink into the ground */
+.dest-beacon.fading .beacon-inner { opacity: 0; transform: scale(.3) translateY(8px); }
+@keyframes beamPulse { 0%, 100% { opacity: .72; transform: scaleY(.9); } 50% { opacity: 1; transform: scaleY(1.06); } }
+@keyframes ringPulse { from { transform: scale(.35); opacity: 1; } to { transform: scale(1.7); opacity: 0; } }
+.maplibregl-ctrl-attrib { background: var(--glass-bg) !important; color: var(--text-dim); border-radius: 12px !important; }
+.maplibregl-ctrl-attrib a { color: var(--text-dim) !important; }
+
+/* ==========================================================================
+   Toasts
+   ========================================================================== */
+#toasts {
+  position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
+  bottom: calc(140px + var(--safe-bottom));
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  width: min(440px, calc(100% - 2 * var(--gutter)));
+  pointer-events: none;
+}
+.toast {
+  padding: 10px 16px; border-radius: 16px; font-size: 14px; font-weight: 600; text-align: center;
+  animation: toastIn .3s ease, fade .3s ease reverse forwards; animation-delay: 0s, var(--life, 3.6s);
+}
+@keyframes toastIn { from { opacity: 0; transform: translateY(10px); } }
+
+/* ==========================================================================
+   HUD mode: mirrored high-contrast display for windshield reflection
+   ========================================================================== */
+#hud { position: fixed; inset: 0; z-index: 100; background: #000; color: #7dfcff; display: grid; place-items: center; cursor: pointer; }
+.hud-inner { transform: scaleX(-1); text-align: center; width: 100%; padding: 24px; }
+.hud-row { display: flex; align-items: center; justify-content: center; gap: 36px; }
+.hud-speed { display: flex; flex-direction: column; align-items: center; }
+#hud-speed { font-size: min(34vw, 260px); font-weight: 800; line-height: .9; font-variant-numeric: tabular-nums; text-shadow: 0 0 30px rgba(125,252,255,.6); }
+.hud-speed small { font-size: 28px; font-weight: 700; opacity: .7; }
+#hud.overspeed { color: #ff4d4d; }
+#hud .limit-sign { width: 120px; height: 120px; font-size: 48px; border-width: 12px; }
+.hud-nav { margin-top: 28px; font-size: min(7vw, 44px); font-weight: 700; }
+.hud-hint { position: fixed; bottom: 16px; left: 0; right: 0; font-size: 13px; opacity: .4; }
+
+/* ==========================================================================
+   States
+   ========================================================================== */
+body.previewing #cockpit { display: none; }
+
+/* ==========================================================================
+   Mobile / smartphone (portrait)
+   Lighter blur for cheaper compositing, compact bottom strip,
+   touch-sized FABs on the right, auto-hiding search bar while driving.
+   ========================================================================== */
+@media (max-width: 760px) {
+  :root { --gutter: 10px; --blur: 10px; --sat: 140%; --radius: 20px; }
+
+  #topbar { min-height: 54px; padding: 4px 4px 4px 14px; }
+  #search-input { height: 44px; font-size: 16px; }
+  .gps-chip { padding: 0 9px; }
+  #nav-banner { padding: 12px 14px; }
+  .turn-icon { width: 54px; height: 54px; border-radius: 16px; }
+  .turn-icon svg { width: 38px; height: 38px; }
+  .nav-distance { font-size: 28px; }
+  .nav-instruction { font-size: 15px; }
+
+  /* Compact bottom cockpit strip, trip bar full width above it */
+  #cockpit { left: var(--gutter); right: var(--gutter); max-width: none; bottom: calc(var(--gutter) + var(--safe-bottom)); gap: 8px; }
+  #dash { gap: 10px; padding: 8px 12px 8px 14px; border-radius: 26px; }
+  #trip-bar { min-width: 0; padding: 10px 8px 10px 2px; border-radius: 24px; }
+  .trip-cell { padding: 0 4px; }
+  .trip-cell b { font-size: clamp(22px, 7.4vw, 34px); }
+  .trip-cell > span { font-size: 10px; margin-top: 4px; }
+  .end-btn { min-height: 46px; padding: 0 14px; font-size: 15px; }
+  .dash-speed { min-width: 62px; }
+  #speed-value { font-size: 40px; letter-spacing: -1.5px; }
+  .dash-speed .unit { font-size: 10px; }
+  .limit-sign { width: 50px; height: 50px; font-size: 19px; border-width: 5px; }
+  .limit-sign.wide span { font-size: 16px; }
+  .dash-info { gap: 2px; }
+  .dash-street { font-size: 14px; max-width: none; }
+
+  /* Touch-friendly FAB column above the strip */
+  #map-controls {
+    top: auto; transform: none;
+    bottom: calc(96px + var(--safe-bottom));
+    padding: 5px; border-radius: 26px;
+  }
+  #map-controls > .icon-btn { width: 46px; height: 46px; border-radius: 50%; }
+  .cam-modes { display: none; }                 /* one cycling button saves height */
+  #btn-cam-cycle { display: grid; }
+  .maplibregl-ctrl-bottom-right { bottom: calc(86px + var(--safe-bottom)); }
+  #toasts { bottom: calc(100px + var(--safe-bottom)); width: calc(100% - 110px); left: var(--gutter); transform: none; }
+  /* While navigating the trip bar adds a row: lift everything above it */
+  body.navigating #map-controls { bottom: calc(178px + var(--safe-bottom)); }
+  body.navigating .maplibregl-ctrl-bottom-right { bottom: calc(168px + var(--safe-bottom)); }
+  body.navigating #toasts { bottom: calc(180px + var(--safe-bottom)); }
+  .drawer { left: var(--gutter); width: auto; }
+}
+
+/* Very narrow phones */
+@media (max-width: 380px) {
+  #speed-value { font-size: 34px; }
+  .end-btn { padding: 0 10px; }
+}
+
+/* ==========================================================================
+   Phones in landscape: short screens. Controls become a horizontal row,
+   the top stack narrows to the left, dash stays compact bottom-left.
+   ========================================================================== */
+@media (max-height: 520px) and (orientation: landscape) {
+  :root { --gutter: 10px; --blur: 10px; --sat: 140%; }
+  #top-stack { left: calc(var(--gutter) + env(safe-area-inset-left, 0px)); transform: none; width: min(440px, 52%); gap: 8px; }
+  #topbar { min-height: 50px; }
+  #nav-banner { padding: 10px 12px; }
+  .turn-icon { width: 46px; height: 46px; }
+  .turn-icon svg { width: 32px; height: 32px; }
+  .nav-distance { font-size: 22px; }
+  .nav-instruction { font-size: 14px; -webkit-line-clamp: 1; }
+  .nav-then { display: none !important; }
+
+  #cockpit { left: var(--gutter); right: auto; bottom: calc(var(--gutter) + var(--safe-bottom)); max-width: 56%; gap: 8px; }
+  #dash { padding: 8px 14px; gap: 10px; }
+  #trip-bar { min-width: 0; padding: 8px 8px 8px 2px; }
+  .trip-cell b { font-size: 26px; }
+  .trip-cell > span { font-size: 10px; margin-top: 3px; }
+  .end-btn { min-height: 42px; padding: 0 14px; }
+  #speed-value { font-size: 38px; }
+  .limit-sign { width: 48px; height: 48px; font-size: 18px; border-width: 5px; }
+
+  #map-controls {
+    flex-direction: row; top: calc(var(--gutter) + var(--safe-top)); bottom: auto; transform: none;
+    right: calc(var(--gutter) + env(safe-area-inset-right, 0px));
+  }
+  .cam-modes { flex-direction: row; }
+  .ctrl-sep { width: 1px; height: 28px; margin: 0 4px; }
+  #map-controls > .icon-btn { width: 44px; height: 44px; }
+  .cam-modes .icon-btn { width: 46px; height: 38px; }
+  .maplibregl-ctrl-bottom-right { bottom: 0; }
+  #toasts { bottom: calc(80px + var(--safe-bottom)); left: auto; right: var(--gutter); transform: none; width: min(360px, 40%); }
+  .sheet { left: auto; right: var(--gutter); transform: none; width: min(420px, 50%); max-height: calc(100% - 2 * var(--gutter)); overflow-y: auto; }
+  @keyframes sheetIn { from { opacity: 0; transform: translateY(20px); } }
+}
+
+/* Large desktops: a little more breathing room */
+@media (min-width: 1400px) {
+  :root { --gutter: 24px; }
+  .limit-sign { width: 76px; height: 76px; font-size: 28px; }
+}
+
+/* Touch screens: bigger targets everywhere */
+@media (pointer: coarse) {
+  .icon-btn.small { width: 40px; height: 40px; }
+  .row { min-height: 52px; }
+  .row select { height: 42px; }
+  #search-results li { padding: 13px 12px; }
+}
+
+/* Short phones in portrait: the control column would collide with the top
+   stack, so it becomes a row sitting just above the cockpit. */
+@media (max-width: 760px) and (max-height: 740px) and (orientation: portrait) {
+  #map-controls { flex-direction: row; bottom: calc(92px + var(--safe-bottom)); padding: 4px; border-radius: 26px; }
+  #map-controls > .icon-btn { width: 44px; height: 44px; }
+  .ctrl-sep { display: none; }
+  body.navigating #map-controls { bottom: calc(174px + var(--safe-bottom)); }
+  #toasts { bottom: calc(150px + var(--safe-bottom)); width: calc(100% - 2 * var(--gutter)); }
+  body.navigating #toasts { bottom: calc(232px + var(--safe-bottom)); }
+}
+
+/* ==========================================================================
+   Driving widgets (Flitsmeister-inspired): dark, high-contrast cards on top of
+   the glass, in day and night alike, so the numbers stay legible on any map.
+   Custom properties are re-pointed inside .card, so children follow suit.
+   ========================================================================== */
+.card {
+  --text: #ffffff;
+  --text-dim: rgba(226, 232, 255, .62);
+  --glass-border: rgba(255, 255, 255, .10);
+  --glass-edge: rgba(255, 255, 255, .14);
+  --hover: rgba(255, 255, 255, .08);
+  --eta: #4ade80;
+  color: var(--text);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .07), rgba(255, 255, 255, 0) 45%), rgba(12, 16, 28, .84) !important;
+  border-color: rgba(255, 255, 255, .10);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35), 0 2px 6px rgba(0, 0, 0, .25), inset 0 1px 0 rgba(255, 255, 255, .12);
+}
+.card::before { background: linear-gradient(180deg, rgba(255, 255, 255, .08) 0%, rgba(255, 255, 255, 0) 30%); }
+
+/* Navigation card: accent strip on the left, oversized distance */
+#nav-banner.card { box-shadow: inset 4px 0 0 var(--accent), 0 10px 30px rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255, 255, 255, .12); }
+#nav-banner .nav-distance { font-size: clamp(30px, 3vw, 40px); letter-spacing: -1px; }
+#nav-banner .turn-icon { border-radius: 16px; box-shadow: 0 6px 18px rgba(56, 189, 248, .35), inset 0 1px 0 rgba(255,255,255,.4); }
+
+/* Speed widget: big numerals inside a ring that fills with speed (relative to the limit) */
+#dash .dash-speed {
+  position: relative; display: grid; place-items: center; align-content: center;
+  width: 108px; height: 108px; min-width: 0;
+}
+.speed-ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(135deg); }
+.speed-ring circle { fill: none; stroke-width: 7; stroke-linecap: round; stroke-dasharray: 207.3 276.5; }   /* 270° gauge */
+.speed-ring .track { stroke: rgba(255, 255, 255, .1); }
+.speed-ring .arc { stroke: var(--accent); stroke-dashoffset: 207.3; transition: stroke-dashoffset .35s ease, stroke .3s; filter: drop-shadow(0 0 4px currentColor); color: var(--accent); }
+.speed-ring .arc.near { stroke: #fbbf24; color: #fbbf24; }
+.speed-ring .arc.over { stroke: var(--danger); color: var(--danger); }
+#dash #speed-value { position: relative; font-size: 40px; letter-spacing: -1.5px; }
+#dash .dash-speed .unit { position: relative; margin-top: 2px; font-size: 10px; letter-spacing: 1.2px; }
+#dash .limit-sign { box-shadow: 0 0 0 3px rgba(255, 255, 255, .9), 0 6px 16px rgba(0, 0, 0, .45); }
+#dash .dash-street { font-size: 17px; letter-spacing: .1px; }
+#dash { padding: 10px 18px 10px 12px; }
+.dash-info::before {
+  content: "Current road"; display: block; margin-bottom: 2px;
+  font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--text-dim);
+}
+
+/* Trip card: label-on-top widget rows */
+#trip-bar.card .trip-cell > span { order: -1; margin: 0 0 4px; }
+#trip-bar.card .trip-cell { justify-content: center; }
+
+@media (max-width: 760px) {
+  #dash .dash-speed { width: 76px; height: 76px; }
+  .speed-ring circle { stroke-width: 8; }
+  #dash #speed-value { font-size: 28px; letter-spacing: -1px; }
+  #dash .dash-speed .unit { font-size: 8px; }
+  #dash { padding: 6px 12px 6px 6px; }
+  #dash .dash-street { font-size: 14px; }
+  #nav-banner .nav-distance { font-size: 28px; }
+}
+@media (max-height: 520px) and (orientation: landscape) {
+  #dash .dash-speed { width: 68px; height: 68px; }
+  #dash #speed-value { font-size: 26px; }
+  .dash-info::before { display: none; }
+}
+
+/* Parked close-up: let the scene breathe */
+body.idle #map-controls { opacity: .55; transition: opacity .6s; }
+body.idle #map-controls:hover { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body data-cam="3d">
+
+  <!-- ===================== SVG ICON SPRITE ===================== -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+      <symbol id="i-locate" viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8z"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></symbol>
+      <symbol id="i-volume"viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></symbol>
+      <symbol id="i-mute" viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M22 9l-6 6M16 9l6 6"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 22s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+    </defs>
+  </svg>
+
+  <!-- ===================== MAP ===================== -->
+  <div id="map" aria-label="Map"></div>
+
+  <!-- ===================== TOP STACK ===================== -->
+  <div id="top-stack">
+    <header id="topbar" class="glass">
+      <div class="search-wrap">
+        <svg class="ico"><use href="#i-search"/></svg>
+        <input id="search-input" type="search" placeholder="Where to?" autocomplete="off" spellcheck="false" aria-label="Search destination">
+        <button id="search-clear" class="icon-btn small hidden" aria-label="Clear search"><svg class="ico"><use href="#i-x"/></svg></button>
+      </div>
+      <button id="gps-chip" class="gps-chip" title="GPS status" aria-label="GPS status">
+        <span class="bars" data-level="0"><i></i><i></i><i></i><i></i></span>
+        <span id="gps-label">GPS</span>
+      </button>
+      <button id="btn-settings" class="icon-btn" aria-label="Settings"><svg class="ico"><use href="#i-settings"/></svg></button>
+      <ul id="search-results" class="glass hidden" role="listbox"></ul>
+    </header>
+
+    <!-- Turn-by-turn navigation banner -->
+    <section id="nav-banner" class="glass card hidden" aria-live="polite">
+      <div class="nav-main">
+        <div class="turn-icon"><svg id="turn-svg" viewBox="0 0 48 48"></svg></div>
+        <div class="nav-text">
+          <div id="nav-distance" class="nav-distance">–</div>
+          <div id="nav-instruction" class="nav-instruction">–</div>
+        </div>
+      </div>
+      <div class="nav-progress"><i id="nav-progress"></i></div>
+      <div id="nav-then" class="nav-then hidden">Then <svg id="then-svg" viewBox="0 0 48 48"></svg></div>
+    </section>
+  </div>
+
+  <!-- ===================== FLOATING CONTROLS ===================== -->
+  <nav id="map-controls" class="glass" aria-label="Map controls">
+    <button id="btn-recenter" class="icon-btn" title="Recenter on vehicle" aria-label="Recenter"><svg class="ico"><use href="#i-locate"/></svg></button>
+    <div class="cam-modes" role="radiogroup" aria-label="Camera mode">
+      <button class="icon-btn text-btn" data-cam="2d" role="radio" title="2D: top-down, north up">2D</button>
+      <button class="icon-btn text-btn" data-cam="3d" role="radio" title="3D: driving view">3D</button>
+      <button class="icon-btn text-btn" data-cam="cu3d" role="radio" title="CU3D: close-up street cockpit">CU3D</button>
+    </div>
+    <button id="btn-cam-cycle" class="icon-btn text-btn" title="Camera mode (tap to switch)" aria-label="Camera mode">3D</button>
+    <div class="ctrl-sep"></div>
+    <button id="btn-theme" class="icon-btn" title="Day / Night" aria-label="Toggle day or night"><svg class="ico"><use href="#i-moon"/></svg></button>
+    <button id="btn-mute" class="icon-btn" title="Mute / Unmute" aria-label="Mute"><svg class="ico"><use href="#i-volume"/></svg></button>
+    <button id="btn-sim" class="icon-btn" title="Simulate a drive" aria-label="Simulate a drive"><svg class="ico"><use href="#i-play"/></svg></button>
+    <button id="btn-sim-speed" class="icon-btn text-btn hidden" title="Simulation speed">1×</button>
+  </nav>
+
+  <!-- ===================== COCKPIT: trip bar + speed dashboard ===================== -->
+  <div id="cockpit">
+    <section id="trip-bar" class="glass card hidden" aria-label="Trip">
+      <div class="trip-cell eta"><b id="trip-eta">--:--</b><span>Arrival</span></div>
+      <div class="trip-cell"><b><span id="trip-time">--</span><small id="trip-time-unit">min</small></b><span>Time</span></div>
+      <div class="trip-cell"><b><span id="trip-dist">--</span><small id="trip-dist-unit">km</small></b><span>Distance</span></div>
+      <button id="btn-end-nav" class="pill danger end-btn">End</button>
+    </section>
+
+    <section id="dash" class="glass card" aria-label="Speedometer">
+      <div class="dash-speed">
+        <svg class="speed-ring" viewBox="0 0 100 100" aria-hidden="true">
+          <circle class="track" cx="50" cy="50" r="44"/><circle id="speed-arc" class="arc" cx="50" cy="50" r="44"/>
+        </svg>
+        <span id="speed-value">0</span>
+        <span class="unit">km/h</span>
+      </div>
+      <div id="limit-sign" class="limit-sign unknown" title="Speed limit"><span id="limit-value">–</span></div>
+      <div class="dash-info">
+        <div id="dash-street" class="dash-street">Locating…</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ===================== ROUTE PREVIEW SHEET ===================== -->
+  <section id="route-panel" class="glass sheet hidden" aria-label="Route options">
+    <header class="sheet-head">
+      <div>
+        <div class="eyebrow">Route to</div>
+        <h2 id="dest-name">Destination</h2>
+      </div>
+      <button id="route-close" class="icon-btn" aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
+    </header>
+    <div id="route-options" class="route-options"><div class="muted">Calculating routes…</div></div>
+    <div class="sheet-actions">
+      <button id="btn-start-nav" class="pill primary" disabled><svg class="ico"><use href="#i-locate"/></svg> Start</button>
+      <button id="btn-sim-route" class="pill" disabled><svg class="ico"><use href="#i-play"/></svg> Simulate</button>
+    </div>
+  </section>
+
+  <!-- ===================== SETTINGS DRAWER ===================== -->
+  <aside id="settings-panel" class="glass drawer hidden" aria-label="Settings">
+    <header class="sheet-head">
+      <h2>Settings</h2>
+      <button class="icon-btn" data-close aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button>
+    </header>
+    <div class="drawer-body">
+      <section class="set-group">
+        <h3>Audio</h3>
+        <label class="row"><span>Sound</span><input type="checkbox" class="switch" data-setting="audio"></label>
+        <label class="row"><span>Voice guidance</span><input type="checkbox" class="switch" data-setting="voice"></label>
+        <label class="row"><span>Volume</span><input type="range" min="0" max="1" step="0.1" data-setting="volume" data-num></label>
+        <label class="row"><span>Over-speed tolerance</span>
+          <select data-setting="overspeedTolerance" data-num>
+            <option value="0">Exact limit</option><option value="3">+3 km/h</option>
+            <option value="5">+5 km/h</option><option value="10">+10 km/h</option>
+          </select></label>
+        <label class="row"><span>Over-speed chime</span><input type="checkbox" class="switch" data-setting="overspeedSound"></label>
+      </section>
+
+      <section class="set-group">
+        <h3>Voice guidance</h3>
+        <label class="row"><span>Language</span>
+          <select data-setting="voiceLang">
+            <option value="nl-NL">Nederlands (Nederland)</option><option value="nl-BE">Nederlands (België)</option>
+            <option value="en-US">English (US)</option><option value="en-GB">English (UK)</option>
+          </select></label>
+        <label class="row"><span>Voice</span>
+          <select data-setting="voiceGender"><option value="female">Female</option><option value="male">Male</option></select></label>
+        <label class="row"><span>System voice</span>
+          <select id="voice-name" data-setting="voiceName"><option value="">Automatic</option></select></label>
+        <p id="voice-note" class="muted small"></p>
+        <button id="btn-test-voice" class="pill"><svg class="ico"><use href="#i-volume"/></svg> Test voice</button>
+      </section>
+
+      <section class="set-group">
+        <h3>Navigation</h3>
+        <label class="row"><span>Route preference</span>
+          <select data-setting="routePreference"><option value="fastest">Fastest</option><option value="shortest">Shortest</option></select></label>
+        <label class="row"><span>Avoid tolls</span><input type="checkbox" class="switch" data-setting="avoidTolls"></label>
+        <label class="row"><span>Avoid highways</span><input type="checkbox" class="switch" data-setting="avoidHighways"></label>
+        <label class="row"><span>Auto-zoom by speed</span><input type="checkbox" class="switch" data-setting="autoZoom"></label>
+      </section>
+
+      <section class="set-group">
+        <h3>Display</h3>
+        <label class="row"><span>Default camera</span>
+          <select data-setting="cameraMode"><option value="2d">2D</option><option value="3d">3D</option><option value="cu3d">CU3D (close-up)</option></select></label>
+        <label class="row"><span>Day / night</span>
+          <select data-setting="theme"><option value="auto">Automatic (sunset)</option><option value="day">Always day</option><option value="night">Always night</option></select></label>
+        <label class="row"><span>HUD mode (windshield mirror)</span><input type="checkbox" class="switch" data-setting="hud"></label>
+        <label class="row"><span>LUP — Light Up Parking</span><input type="checkbox" class="switch" data-setting="lup"></label>
+      </section>
+
+      <section class="set-group">
+        <h3>GPS status</h3>
+        <div class="gps-panel">
+          <div class="gps-ring"><span id="gps-ring-dot"></span></div>
+          <dl class="gps-stats">
+            <div><dt>Source</dt><dd id="gps-source">–</dd></div>
+            <div><dt>Signal</dt><dd id="gps-signal">–</dd></div>
+            <div><dt>Accuracy</dt><dd id="gps-accuracy">–</dd></div>
+            <div><dt>Last fix</dt><dd id="gps-age">–</dd></div>
+            <div class="wide"><dt>Position</dt><dd id="gps-coords">–</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="set-group" id="install-group">
+        <h3>App</h3>
+        <p id="install-note" class="muted small">Install MapNav on your home screen to use it full-screen like a native app.</p>
+        <button id="btn-install" class="pill primary"><svg class="ico"><use href="#i-download"/></svg> <span id="install-label">Install app</span></button>
+        <ol id="install-steps" class="install-steps muted small hidden"></ol>
+      </section>
+
+      <section class="set-group">
+        <h3>About</h3>
+        <p class="muted small">
+          Map data © OpenStreetMap contributors · Tiles by OpenFreeMap / OpenMapTiles ·
+          Routing by OSRM · Search by Nominatim · Speed limits via Overpass API.
+          Speed limits are informational only — always follow road signs.
+        </p>
+      </section>
+    </div>
+  </aside>
+
+  <!-- ===================== LOCATION PERMISSION PROMPT ===================== -->
+  <div id="perm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="perm-title">
+    <div class="glass dialog perm">
+      <div class="perm-orb"><svg class="ico"><use href="#i-locate"/></svg></div>
+      <h2 id="perm-title">Turn on location</h2>
+      <p>Glassway uses your position to show your speed, the local speed limit and turn-by-turn directions. Your location stays on this device except to look up map data.</p>
+      <div class="sheet-actions">
+        <button id="perm-allow" class="pill primary">Allow location</button>
+        <button id="perm-demo" class="pill">Use demo mode</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== HUD OVERLAY ===================== -->
+  <div id="hud" class="hidden" aria-label="Heads-up display. Tap to exit.">
+    <div class="hud-inner">
+      <div class="hud-row">
+        <div class="hud-speed"><span id="hud-speed">0</span><small>km/h</small></div>
+        <div id="hud-limit" class="limit-sign unknown"><span>–</span></div>
+      </div>
+      <div id="hud-nav" class="hud-nav"></div>
+      <div class="hud-hint">Tap to exit HUD</div>
+    </div>
+  </div>
+
+  <div id="toasts" aria-live="polite"></div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<!-- three.js renders the 3D car inside the map's WebGL context (r149: last classic-script build) -->
+<script src="https://unpkg.com/three@0.149.0/build/three.min.js"></script>
+<script>
+/* ==========================================================================
+   Glassway — Liquid Glass Navigation
+   --------------------------------------------------------------------------
+   Modules (plain objects, in dependency order):
+     CONFIG / CAMERA_MODES / Settings / Bus   configuration & preferences
+     Geo / Line / Fmt / Net                   geometry, formatting, HTTP
+     AudioFx / Theme                          chimes + voice, day/night
+     MapView                                  MapLibre map, 3D buildings, route, camera
+     Motion / Renderer                        60 fps interpolation of car + camera
+     GPS / Sim                                real geolocation, simulated drive
+     SpeedLimit / Search / Router / Nav       limits, geocoding, routing, guidance
+     HUD / UI                                 DOM wiring
+   ========================================================================== */
+'use strict';
+
+/* ==========================================================================
+   CONFIG
+   ========================================================================== */
+const CONFIG = {
+  defaultCenter: [3.7174, 51.0543],            // Ghent [lng, lat]: fallback / demo location
+  styles: {
+    day: 'https://tiles.openfreemap.org/styles/liberty',
+    night: 'https://tiles.openfreemap.org/styles/dark',
+  },
+  osrm: 'https://router.project-osrm.org',
+  nominatim: 'https://nominatim.openstreetmap.org',
+  overpass: ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'],
+  roadLookAheadM: 700,                         // road tiles are loaded at least this far ahead (≥1 min at speed)
+  roadEdgeMarginM: 400,                        // ...and across a tile edge closer than this
+  roadCacheMaxAgeMs: 14 * 864e5,               // cached road tiles older than 14 days refresh in the background
+  parkingRadiusM: 1500,                        // LUP: parking polygons fetched around the car
+  offRouteThresholdM: 25,                      // reroute as soon as the car is further than this off the route
+  rerouteCooldownMs: 4000,                     // ...but at most one routing request per 4 s
+  storagePrefix: 'glassway.',
+};
+
+/**
+ * Camera modes. zoom(v) maps speed (km/h) to zoom when auto-zoom is on.
+ * offset = fraction of the screen height used as top padding, which pushes the
+ * vehicle down the screen; in CU3D the car sits low so the street ahead fills the view.
+ * The vehicle marker always lies flat on the road plane.
+ */
+const CAMERA_MODES = {
+  // Course-up: the 2D map also rotates with the driving direction.
+  '2d':   { pitch: 0,  offset: 0.18, headingUp: true,  zoom: (v) => clamp(16.8 - v / 45, 14.6, 16.8) },
+  '3d':   { pitch: 60, offset: 0.36, headingUp: true,  zoom: (v) => clamp(18.65 - v / 55, 16.75, 18.65) },
+  // Cockpit view: maximum tilt, very close, car in the lower-middle with the street rushing toward it.
+  'cu3d': { pitch: 85, offset: 0.42, headingUp: true,  zoom: (v) => clamp(21.2 - v / 150, 20.4, 21.2) },
+};
+
+/**
+ * Parked close-up (Tesla-style): low, tight 3/4 rear view of the car, used
+ * only in free driving (no route) while standing still. rate = slower,
+ * cinematic easing for the move in and out.
+ */
+const IDLE_CAMERA = { pitch: 72, offset: 0.12, zoom: () => 20.8, bearingOffset: 32, rate: 0.9 };
+
+/** Road classes considered for speed limits. */
+const HIGHWAY_FILTER = '[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road)(_link)?$"]';
+
+/* ==========================================================================
+   Helpers
+   ========================================================================== */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+/** Frame-rate independent smoothing factor: fraction to move toward a target this frame. */
+const ease = (dt, rate) => 1 - Math.exp(-rate * dt);
+
+const store = {
+  get(key, fallback) {
+    try { const v = localStorage.getItem(CONFIG.storagePrefix + key); return v == null ? fallback : JSON.parse(v); }
+    catch { return fallback; }
+  },
+  set(key, value) {
+    try { localStorage.setItem(CONFIG.storagePrefix + key, JSON.stringify(value)); } catch { /* private mode */ }
+  },
+};
+
+const Bus = {
+  target: new EventTarget(),
+  on(name, fn) { this.target.addEventListener(name, (e) => fn(e.detail)); },
+  emit(name, detail) { this.target.dispatchEvent(new CustomEvent(name, { detail })); },
+};
+
+/* ==========================================================================
+   Settings (persisted in localStorage)
+   ========================================================================== */
+const DEFAULT_SETTINGS = {
+  audio: true,
+  voice: true,
+  volume: 0.8,
+  overspeedTolerance: 3,
+  overspeedSound: true,
+  routePreference: 'fastest',
+  avoidTolls: false,
+  avoidHighways: false,
+  autoZoom: true,
+  cameraMode: '3d',
+  theme: 'auto',
+  hud: false,
+  voiceLang: /^nl/i.test(navigator.language || '') ? (/be$/i.test(navigator.language) ? 'nl-BE' : 'nl-NL')
+    : (/gb$/i.test(navigator.language || '') ? 'en-GB' : 'en-US'),
+  voiceGender: 'female',
+  voiceName: '',          // '' = pick automatically from language + gender
+  lup: false,             // Light Up Parking
+};
+
+const Settings = {
+  values: { ...DEFAULT_SETTINGS },
+  load() {
+    this.values = { ...DEFAULT_SETTINGS, ...store.get('settings', {}) };
+    if (!CAMERA_MODES[this.values.cameraMode]) this.values.cameraMode = '3d';
+    // Older saves stored just 'nl' / 'en'.
+    if (this.values.voiceLang === 'nl') this.values.voiceLang = 'nl-NL';
+    if (!/^(nl-NL|nl-BE|en-US|en-GB)$/.test(this.values.voiceLang)) this.values.voiceLang = 'en-US';
+  },
+  get(key) { return this.values[key]; },
+  set(key, value) {
+    if (this.values[key] === value) return;
+    this.values[key] = value;
+    store.set('settings', this.values);
+    Bus.emit('setting', { key, value });
+  },
+};
+
+/* ==========================================================================
+   Geo: geodesic helpers. Coordinates are always [lng, lat].
+   ========================================================================== */
+const Geo = {
+  R: 6371008.8,
+  RAD: Math.PI / 180,
+
+  distance(a, b) {
+    const r = this.RAD;
+    const dLat = (b[1] - a[1]) * r, dLng = (b[0] - a[0]) * r;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * r) * Math.cos(b[1] * r) * Math.sin(dLng / 2) ** 2;
+    return 2 * this.R * Math.asin(Math.min(1, Math.sqrt(h)));
+  },
+
+  bearing(a, b) {
+    const r = this.RAD;
+    const y = Math.sin((b[0] - a[0]) * r) * Math.cos(b[1] * r);
+    const x = Math.cos(a[1] * r) * Math.sin(b[1] * r) - Math.sin(a[1] * r) * Math.cos(b[1] * r) * Math.cos((b[0] - a[0]) * r);
+    return (Math.atan2(y, x) / r + 360) % 360;
+  },
+
+  destination(p, bearingDeg, dist) {
+    const r = this.RAD, d = dist / this.R, b = bearingDeg * r;
+    const lat1 = p[1] * r, lng1 = p[0] * r;
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(b));
+    const lng2 = lng1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+    return [lng2 / r, lat2 / r];
+  },
+
+  /** Signed smallest difference b - a in degrees, range [-180, 180). */
+  angleDiff(a, b) { return ((b - a + 540) % 360) - 180; },
+
+  /** Move angle a toward b by factor t along the shortest arc. */
+  lerpAngle(a, b, t) { return (a + this.angleDiff(a, b) * t + 360) % 360; },
+
+  lerp(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]; },
+
+  /** Project p onto segment a-b (local equirectangular approximation). */
+  projectOnSegment(p, a, b) {
+    const kx = Math.cos(p[1] * this.RAD) * 111320, ky = 110540;
+    const ax = (a[0] - p[0]) * kx, ay = (a[1] - p[1]) * ky;
+    const dx = (b[0] - a[0]) * kx, dy = (b[1] - a[1]) * ky;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? clamp(-(ax * dx + ay * dy) / len2, 0, 1) : 0;
+    return { t, dist: Math.hypot(ax + t * dx, ay + t * dy) };
+  },
+
+  circle(center, radius, steps = 48) {
+    const ring = [];
+    for (let i = 0; i <= steps; i++) ring.push(this.destination(center, (i / steps) * 360, radius));
+    return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] }, properties: {} };
+  },
+};
+
+/** Polyline with cumulative distances, used for routes and the simulator. */
+class Line {
+  constructor(coords) {
+    this.coords = coords;
+    this.cum = [0];
+    for (let i = 1; i < coords.length; i++) this.cum.push(this.cum[i - 1] + Geo.distance(coords[i - 1], coords[i]));
+    this.length = this.cum[this.cum.length - 1];
+  }
+
+  /** Segment index i such that cum[i] <= d < cum[i+1]. */
+  segmentAt(d) {
+    let lo = 0, hi = this.coords.length - 2;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.cum[mid] <= d) lo = mid; else hi = mid - 1;
+    }
+    return Math.max(0, lo);
+  }
+
+  pointAt(d) {
+    d = clamp(d, 0, this.length);
+    const i = this.segmentAt(d);
+    const segLen = this.cum[i + 1] - this.cum[i] || 1;
+    return Geo.lerp(this.coords[i], this.coords[i + 1] || this.coords[i], (d - this.cum[i]) / segLen);
+  }
+
+  /** Nearest point on the line to p, searching segments [from, to]. */
+  nearest(p, from = 0, to = this.coords.length - 2) {
+    let best = { dist: Infinity, i: 0, t: 0, along: 0 };
+    for (let i = Math.max(0, from); i <= Math.min(to, this.coords.length - 2); i++) {
+      const pr = Geo.projectOnSegment(p, this.coords[i], this.coords[i + 1]);
+      if (pr.dist < best.dist) best = { dist: pr.dist, i, t: pr.t, along: this.cum[i] + pr.t * (this.cum[i + 1] - this.cum[i]) };
+    }
+    return best;
+  }
+}
+
+/**
+ * A driving curve for a route, so the car steers through corners instead of
+ * pivoting on polyline vertices:
+ *  1. every corner gets a quadratic Bézier fillet (≈10 m turn radius);
+ *  2. the result is resampled every 1.5 m of route distance and averaged over
+ *     ±6 m. Step 2 matters because OSM often draws an intersection as several
+ *     1–3 m legs, which leave no room for a fillet; averaging spreads any turn
+ *     over ≥9 m of road while cutting corners by under ~2 m.
+ * Samples are indexed by original route distance, so the rest of the app keeps
+ * using plain route distances. Heading = tangent of the smoothed samples.
+ */
+class Curve {
+  static for(line) { return line._curve || (line._curve = new Curve(line)); }
+
+  constructor(line, radius = 10, step = 1.5, window = 4) {
+    const c = line.coords, cum = line.cum;
+    // 1) fillets
+    const pts = [c[0]], orig = [0];
+    for (let i = 1; i < c.length - 1; i++) {
+      const p = c[i - 1], v = c[i], n = c[i + 1];
+      const l1 = cum[i] - cum[i - 1], l2 = cum[i + 1] - cum[i];
+      const theta = l1 > 0.01 && l2 > 0.01 ? Math.abs(Geo.angleDiff(Geo.bearing(p, v), Geo.bearing(v, n))) * Geo.RAD : 0;
+      // Trim distance for the radius; ≤45% of each leg so neighbouring fillets never overlap.
+      const d = Math.min(radius * Math.tan(Math.min(theta, 2.6) / 2), l1 * 0.45, l2 * 0.45);
+      if (theta < 0.14 || d < 0.5) { pts.push(v); orig.push(cum[i]); continue; }
+      const A = Geo.lerp(v, p, d / l1), B = Geo.lerp(v, n, d / l2);
+      const steps = Math.max(4, Math.ceil(theta / 0.17));   // ~10° per sample
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps, u = 1 - t;
+        pts.push([u * u * A[0] + 2 * u * t * v[0] + t * t * B[0], u * u * A[1] + 2 * u * t * v[1] + t * t * B[1]]);
+        orig.push(cum[i] - d + 2 * d * t);
+      }
+    }
+    pts.push(c[c.length - 1]);
+    orig.push(line.length);
+
+    // 2) resample by route distance, then moving average
+    const filletAt = (a) => {
+      let lo = 0, hi = orig.length - 2;
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (orig[mid] <= a) lo = mid; else hi = mid - 1; }
+      const span = orig[lo + 1] - orig[lo];
+      return Geo.lerp(pts[lo], pts[lo + 1] || pts[lo], span > 0 ? clamp((a - orig[lo]) / span, 0, 1) : 0);
+    };
+    const n = Math.max(2, Math.ceil(line.length / step) + 1);
+    const raw = [];
+    for (let k = 0; k < n; k++) raw.push(filletAt(Math.min(k * step, line.length)));
+    const sm = raw.map((_, k) => {
+      if (k === 0 || k === n - 1) return raw[k];          // keep the true start and end
+      const lo = Math.max(0, k - window), hi = Math.min(n - 1, k + window);
+      let x = 0, y = 0;
+      for (let j = lo; j <= hi; j++) { x += raw[j][0]; y += raw[j][1]; }
+      return [x / (hi - lo + 1), y / (hi - lo + 1)];
+    });
+    this.step = step;
+    this.length = line.length;
+    this.pts = sm;
+    this.tan = sm.map((_, k) => {
+      const a = sm[Math.max(0, k - 1)], b = sm[Math.min(n - 1, k + 1)];
+      return Geo.distance(a, b) > 0.05 ? Geo.bearing(a, b) : null;
+    });
+    for (let k = 1; k < n; k++) if (this.tan[k] == null) this.tan[k] = this.tan[k - 1];
+    for (let k = n - 2; k >= 0; k--) if (this.tan[k] == null) this.tan[k] = this.tan[k + 1] ?? 0;
+  }
+
+  /** Position and tangent heading at an original-route distance. */
+  at(a) {
+    const f = clamp(a, 0, this.length) / this.step;
+    const k = Math.min(Math.floor(f), this.pts.length - 2), t = clamp(f - k, 0, 1);
+    return {
+      pos: Geo.lerp(this.pts[k], this.pts[k + 1], t),
+      heading: Geo.lerpAngle(this.tan[k], this.tan[k + 1], t),
+    };
+  }
+}
+
+/* ==========================================================================
+   Formatting
+   ========================================================================== */
+const Fmt = {
+  distance(m) {
+    if (m < 100) return `${Math.max(0, Math.round(m / 10) * 10)} m`;
+    if (m < 1000) return `${Math.round(m / 50) * 50} m`;
+    if (m < 10000) return `${(m / 1000).toFixed(1)} km`;
+    return `${Math.round(m / 1000)} km`;
+  },
+  duration(sec) {
+    const min = Math.max(1, Math.round(sec / 60));
+    if (min < 60) return `${min} min`;
+    return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')}`;
+  },
+  clock(date) { return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); },
+  escape(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); },
+};
+
+/* ==========================================================================
+   Net: fetch with timeout + Overpass with mirror fallback
+   ========================================================================== */
+const Net = {
+  async json(url, opts = {}, timeoutMs = 12000) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    if (opts.signal) opts.signal.addEventListener('abort', () => ctrl.abort());
+    try {
+      const res = await fetch(url, { ...opts, signal: ctrl.signal });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.message || `HTTP ${res.status}`);
+      return body;
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+
+  /**
+   * Overpass, one request at a time. overpass-api.de allows about two
+   * simultaneous requests per user (a third gets HTTP 429), is often slow
+   * (20–40 s) and briefly at capacity (502/504), so requests wait in a
+   * priority queue (0 = route, 1 = roads around the car, 2 = background) and
+   * busy answers are retried with backoff before trying the next server.
+   */
+  queue: [],
+  busy: false,
+  seq: 0,
+  overpass(query, timeoutMs = 60000, priority = 1) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ query, timeoutMs, priority, seq: this.seq++, resolve, reject });
+      this.queue.sort((a, b) => a.priority - b.priority || a.seq - b.seq);
+      this.pump();
+    });
+  },
+
+  async pump() {
+    if (this.busy || !this.queue.length) return;
+    this.busy = true;
+    const job = this.queue.shift();
+    try { job.resolve(await this.overpassNow(job.query, job.timeoutMs)); } catch (e) { job.reject(e); }
+    this.busy = false;
+    this.pump();
+  },
+
+  async overpassNow(query, timeoutMs) {
+    let lastErr;
+    for (const endpoint of CONFIG.overpass) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const data = await this.json(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'data=' + encodeURIComponent(query),
+          }, timeoutMs);
+          // A server-side timeout still answers 200, with a "runtime error" remark and partial data.
+          if (/runtime error|timed out/i.test(data?.remark || '')) throw new Error(`Overpass: ${data.remark}`);
+          return data;
+        } catch (e) {
+          lastErr = e;
+          if (!/HTTP (429|502|503|504)/.test(e.message)) break;   // not "busy": try the next server
+          await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastErr;
+  },
+};
+
+/* ==========================================================================
+   AudioFx: synthesized chimes (Web Audio) + speech
+   ========================================================================== */
+const AudioFx = {
+  ctx: null,
+
+  /** Must run inside a user gesture at least once (autoplay rules). */
+  unlock() {
+    if (!this.ctx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) this.ctx = new Ctx();
+    }
+    if (this.ctx?.state === 'suspended') this.ctx.resume();
+  },
+
+  tone(freq, start, dur, type = 'sine', gain = 0.25) {
+    const ctx = this.ctx;
+    const osc = ctx.createOscillator(), g = ctx.createGain();
+    const t0 = ctx.currentTime + start, vol = gain * Settings.get('volume');
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol), t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g).connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.05);
+  },
+
+  play(kind) {
+    if (!Settings.get('audio') || !this.ctx) return;
+    if (kind === 'chime') { this.tone(1046, 0, 0.35, 'sine', 0.18); this.tone(1568, 0.12, 0.45, 'sine', 0.14); }
+    if (kind === 'arrive') [523, 659, 784, 1046].forEach((f, i) => this.tone(f, i * 0.12, 0.4, 'sine', 0.16));
+  },
+
+  speak(text) {
+    if (!Settings.get('audio') || !Settings.get('voice')) return;
+    Voice.speak(text);
+  },
+};
+
+/* ==========================================================================
+   GUIDE: navigation phrases in English and Dutch
+   ========================================================================== */
+const GUIDE = {
+  en: {
+    name: 'English',
+    locale: 'en-US',
+    compass: ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'],
+    ordinal: ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth'],
+    turn: { 'slight right': 'Bear right', 'slight left': 'Bear left', 'sharp right': 'Turn sharp right', 'sharp left': 'Turn sharp left',
+      right: 'Turn right', left: 'Turn left', straight: 'Continue straight', uturn: 'Make a U-turn' },
+    cont: 'Continue',
+    onto: (n) => ` onto ${n}`,
+    on: (n) => ` on ${n}`,
+    side: (mod) => (mod.includes('left') ? ' on the left' : mod.includes('right') ? ' on the right' : ''),
+    depart: (dir, on) => `Head ${dir}${on}`,
+    arrive: 'Arrive at your destination',
+    roundabout: (ord, onto) => `At the roundabout, take the ${ord} exit${onto}`,
+    roundaboutTurn: (turn, onto) => `At the roundabout, ${turn.toLowerCase()}${onto}`,
+    exitRoundabout: (onto) => `Exit the roundabout${onto}`,
+    merge: (mod, onto) => `Merge${GUIDE.en.side(mod)}${onto}`,
+    onRamp: (mod, onto) => `Take the ramp${GUIDE.en.side(mod)}${onto}`,
+    offRamp: (mod, towards, onto) => `Take the exit${GUIDE.en.side(mod)}${towards ? ' towards ' + towards : onto}`,
+    fork: (left, onto) => `Keep ${left ? 'left' : 'right'} at the fork${onto}`,
+    endOfRoad: (turn, onto) => `At the end of the road, ${turn.toLowerCase()}${onto}`,
+    follow: (onto) => `Continue${onto}`,
+    meters: (m) => `${m} meters`,
+    km: (k) => (k === 1 ? '1 kilometer' : `${k} kilometers`),
+    inDist: (d, instr) => `In ${d}, ${instr}`,
+    minutes: (min) => (min < 60 ? `${min} minute${min === 1 ? '' : 's'}`
+      : `${Math.floor(min / 60)} hour${min >= 120 ? 's' : ''} and ${min % 60} minutes`),
+    start: (dest, dur) => `Starting route to ${dest}. ${dur}.`,
+    reroute: 'Rerouting',
+    arrived: 'You have arrived at your destination',
+    sample: 'In 300 meters, turn right onto Main Street.',
+  },
+  nl: {
+    name: 'Dutch',
+    locale: 'nl-NL',
+    compass: ['het noorden', 'het noordoosten', 'het oosten', 'het zuidoosten', 'het zuiden', 'het zuidwesten', 'het westen', 'het noordwesten'],
+    ordinal: ['eerste', 'tweede', 'derde', 'vierde', 'vijfde', 'zesde', 'zevende', 'achtste'],
+    turn: { 'slight right': 'Houd rechts aan', 'slight left': 'Houd links aan', 'sharp right': 'Sla scherp rechtsaf', 'sharp left': 'Sla scherp linksaf',
+      right: 'Sla rechtsaf', left: 'Sla linksaf', straight: 'Ga rechtdoor', uturn: 'Keer om' },
+    cont: 'Ga verder',
+    onto: (n) => ` naar ${n}`,
+    on: (n) => ` via ${n}`,
+    side: (mod) => (mod.includes('left') ? ' aan de linkerkant' : mod.includes('right') ? ' aan de rechterkant' : ''),
+    depart: (dir, on) => `Rijd naar ${dir}${on}`,
+    arrive: 'Aankomst op je bestemming',
+    roundabout: (ord, onto) => `Neem op de rotonde de ${ord} afslag${onto}`,
+    roundaboutTurn: (turn, onto) => `Op de rotonde: ${turn.toLowerCase()}${onto}`,
+    exitRoundabout: (onto) => `Verlaat de rotonde${onto}`,
+    merge: (mod, onto) => `Voeg ${mod.includes('left') ? 'links ' : mod.includes('right') ? 'rechts ' : ''}in${onto}`,
+    onRamp: (mod, onto) => `Neem de oprit${GUIDE.nl.side(mod)}${onto}`,
+    offRamp: (mod, towards, onto) => `Neem de afrit${GUIDE.nl.side(mod)}${towards ? ' richting ' + towards : onto}`,
+    fork: (left, onto) => `Houd ${left ? 'links' : 'rechts'} aan bij de splitsing${onto}`,
+    endOfRoad: (turn, onto) => `Aan het einde van de weg: ${turn.toLowerCase()}${onto}`,
+    follow: (onto) => `Volg de weg${onto}`,
+    meters: (m) => `${m} meter`,
+    km: (k) => `${String(k).replace('.', ',')} kilometer`,
+    inDist: (d, instr) => `Over ${d}, ${instr}`,
+    minutes: (min) => (min < 60 ? `${min} ${min === 1 ? 'minuut' : 'minuten'}` : `${Math.floor(min / 60)} uur en ${min % 60} minuten`),
+    start: (dest, dur) => `Route naar ${dest} gestart. Reistijd ${dur}.`,
+    reroute: 'Route wordt herberekend',
+    arrived: 'Je bent aangekomen op je bestemming',
+    sample: 'Over 300 meter, sla rechtsaf naar de Kerkstraat.',
+  },
+};
+const guide = () => GUIDE[Settings.get('voiceLang').slice(0, 2)] || GUIDE.en;
+
+function spokenDistance(m) {
+  const G = guide();
+  return m < 1000 ? G.meters(Math.round(m / 50) * 50 || 50) : G.km(Math.round(m / 100) / 10);
+}
+
+/* ==========================================================================
+   Voice: picks a system speech voice by language and gender
+   --------------------------------------------------------------------------
+   The Web Speech API does not expose gender, so it is inferred from the voice
+   name (e.g. "Google UK English Female", "Microsoft Maarten", "Xander").
+   If no voice of the wanted gender exists, the closest voice is used with a
+   lower/higher pitch so the choice is still audible.
+   ========================================================================== */
+const Voice = {
+  voices: [],
+  FEMALE: /female|woman|vrouw|samantha|victoria|karen|moira|tessa|fiona|serena|kate|susan|zira|hazel|libby|sonia|aria|jenny|ellen|claire|fenna|colette|dena|lotte|emma|amy|joanna|salli|kimberly|ivy|ava|allison|nora|zoe|laura|sara|anna|google nederlands/i,
+  MALE: /\bmale\b|\bman\b|daniel|alex\b|fred|\btom\b|oliver|george|david|mark|guy|ryan|arthur|thomas|maarten|frank|xander|arnaud|rishi|aaron|james|brian|matthew|joey|justin|ruben|lucas|reed|rocko|eddy|grandpa|bart|willem/i,
+  QUALITY: /natural|neural|online|premium|enhanced|google/i,
+
+  init() {
+    if (!('speechSynthesis' in window)) return;
+    this.load();
+    speechSynthesis.addEventListener?.('voiceschanged', () => { this.load(); UI.renderVoiceOptions(); });
+  },
+
+  load() { this.voices = window.speechSynthesis?.getVoices() || []; },
+
+  gender(v) { return this.FEMALE.test(v.name) ? 'female' : this.MALE.test(v.name) ? 'male' : null; },
+
+  /**
+   * Voices for a locale like 'nl-BE': all voices of that language, the exact
+   * region first (Flemish before Netherlands Dutch for nl-BE), then best quality.
+   */
+  forLang(locale) {
+    const base = locale.slice(0, 2).toLowerCase(), exact = locale.toLowerCase();
+    const norm = (v) => v.lang.replace('_', '-').toLowerCase();
+    return this.voices
+      .filter((v) => norm(v).startsWith(base))
+      .sort((a, b) => ((norm(b) === exact) - (norm(a) === exact)) || (this.QUALITY.test(b.name) - this.QUALITY.test(a.name)));
+  },
+
+  /** { voice, exact }: exact = the voice really matches the requested gender/name. */
+  pick() {
+    const list = this.forLang(Settings.get('voiceLang'));
+    const named = Settings.get('voiceName') && list.find((v) => v.name === Settings.get('voiceName'));
+    if (named) return { voice: named, exact: true };
+    const match = list.find((v) => this.gender(v) === Settings.get('voiceGender'));
+    if (match) return { voice: match, exact: true };
+    return { voice: list.find((v) => this.gender(v) == null) || list[0] || null, exact: false };
+  },
+
+  speak(text) {
+    if (!('speechSynthesis' in window)) return;
+    const { voice, exact } = this.pick();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = voice?.lang || Settings.get('voiceLang');
+    if (voice) u.voice = voice;
+    if (!exact) u.pitch = Settings.get('voiceGender') === 'male' ? 0.75 : 1.2;
+    u.rate = 1.02;
+    u.volume = Settings.get('volume');
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  },
+};
+
+/* ==========================================================================
+   Theme: automatic night mode from the sun's elevation at the car position
+   ========================================================================== */
+const Theme = {
+  /** Approximate solar elevation in degrees (good to ~1°). */
+  sunElevation(lat, lng, date = new Date()) {
+    const r = Math.PI / 180;
+    const d = date.getTime() / 86400000 + 2440587.5 - 2451545.0;
+    const g = (357.529 + 0.98560028 * d) * r;
+    const q = 280.459 + 0.98564736 * d;
+    const L = (q + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * r;
+    const e = (23.439 - 0.00000036 * d) * r;
+    const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L));
+    const dec = Math.asin(Math.sin(e) * Math.sin(L));
+    const gmst = (18.697374558 + 24.06570982441908 * d) % 24;
+    const ha = (gmst * 15 + lng) * r - ra;
+    return Math.asin(Math.sin(lat * r) * Math.sin(dec) + Math.cos(lat * r) * Math.cos(dec) * Math.cos(ha)) / r;
+  },
+
+  isNight() {
+    const mode = Settings.get('theme');
+    if (mode === 'day') return false;
+    if (mode === 'night') return true;
+    const p = GPS.last?.lngLat || CONFIG.defaultCenter;
+    return this.sunElevation(p[1], p[0]) < -3;
+  },
+
+  apply() {
+    const night = this.isNight();
+    document.documentElement.dataset.theme = night ? 'dark' : 'light';
+    $('meta[name="theme-color"]').content = night ? '#0b1020' : '#e9edf3';
+    MapView.setNight(night);
+    UI.syncControls();
+  },
+
+  start() {
+    this.apply();
+    setInterval(() => this.apply(), 60000);
+  },
+};
+
+/* ==========================================================================
+   MapView: MapLibre map, 3D buildings, route layers, camera modes
+   ========================================================================== */
+const MapView = {
+  map: null,
+  night: false,
+  mode: '3d',
+  following: true,
+  cam: null,              // smoothed camera state while following
+  carMarker: null,
+  destMarker: null,
+  data: {
+    route: { type: 'FeatureCollection', features: [] },
+    alt: { type: 'FeatureCollection', features: [] },
+    accuracy: { type: 'FeatureCollection', features: [] },
+    parking: { type: 'FeatureCollection', features: [] },
+  },
+  destToken: 0,
+
+  init() {
+    this.night = Theme.isNight();
+    this.mode = Settings.get('cameraMode');
+    const cfg = CAMERA_MODES[this.mode];
+
+    this.map = new maplibregl.Map({
+      container: 'map',
+      style: this.styleUrl(),
+      center: CONFIG.defaultCenter,
+      zoom: cfg.zoom(0),
+      pitch: cfg.pitch,
+      maxPitch: 85,
+      attributionControl: false,
+      fadeDuration: 150,
+      // Cap the backing-store resolution on dense phone screens to save GPU.
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+    });
+    this.map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+    this.map.on('style.load', () => this.onStyleLoad());
+
+    // Manual pan/zoom/rotate/tilt detaches the camera from the vehicle.
+    const detach = (e) => { if (e.originalEvent) this.setFollowing(false); };
+    ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart'].forEach((ev) => this.map.on(ev, detach));
+
+    // Right-click (desktop) or long-press (touch): route to that point.
+    this.map.on('contextmenu', (e) => UI.pickDestination([e.lngLat.lng, e.lngLat.lat]));
+    let pressTimer = null;
+    this.map.on('touchstart', (e) => {
+      clearTimeout(pressTimer);
+      if (e.originalEvent.touches.length !== 1) return;
+      pressTimer = setTimeout(() => UI.pickDestination([e.lngLat.lng, e.lngLat.lat]), 650);
+    });
+    ['touchend', 'touchmove', 'touchcancel', 'movestart'].forEach((ev) => this.map.on(ev, () => clearTimeout(pressTimer)));
+    this.map.on('click', () => UI.revealChrome());
+    this.map.on('error', (e) => console.warn('[map]', e.error?.message || e));
+
+    // Vehicle marker: top-down blue car lying flat on the road. The car body is
+    // centred in a tall box so the headlight beams have room ahead of it while
+    // the marker's anchor stays exactly on the car.
+    const el = document.createElement('div');
+    el.className = 'car-marker';
+    el.innerHTML = `
+      <svg class="car-svg" viewBox="0 0 100 240">
+        <defs>
+          <linearGradient id="beamGrad" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0" stop-color="#fff7dc" stop-opacity=".8"/>
+            <stop offset=".35" stop-color="#ffecb8" stop-opacity=".35"/>
+            <stop offset="1" stop-color="#ffecb8" stop-opacity="0"/>
+          </linearGradient>
+          <radialGradient id="tailGlowGrad"><stop offset="0" stop-color="#ff2b2b" stop-opacity=".75"/><stop offset="1" stop-color="#ff2b2b" stop-opacity="0"/></radialGradient>
+          <linearGradient id="bodyGrad" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#1e40af"/><stop offset=".5" stop-color="#3b82f6"/><stop offset="1" stop-color="#1e40af"/>
+          </linearGradient>
+          <linearGradient id="roofGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/>
+          </linearGradient>
+          <filter id="carBlur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
+          <filter id="carShadowBlur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2"/></filter>
+        </defs>
+        <!-- headlight beams on the asphalt -->
+        <g class="night-fx beams" filter="url(#carBlur)">
+          <path d="M39 99 L12 16 Q28 6 47 12 Z" fill="url(#beamGrad)"/>
+          <path d="M61 99 L53 12 Q72 6 88 16 Z" fill="url(#beamGrad)"/>
+          <path d="M42 99 L30 30 Q50 22 70 30 L58 99 Z" fill="url(#beamGrad)" opacity=".5"/>
+        </g>
+        <!-- red glow on the road behind the car -->
+        <ellipse class="night-fx tail-glow" cx="50" cy="150" rx="22" ry="10" fill="url(#tailGlowGrad)"/>
+        <!-- contact shadow -->
+        <rect x="35" y="97" width="30" height="52" rx="10" fill="rgba(0,0,0,.4)" filter="url(#carShadowBlur)" transform="translate(1.5 2.5)"/>
+        <!-- body -->
+        <rect x="37" y="96" width="26" height="48" rx="9" fill="url(#bodyGrad)" stroke="#dbeafe" stroke-width="1.1"/>
+        <path d="M40 100 Q50 96.5 60 100" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1"/>
+        <!-- mirrors -->
+        <rect x="34.4" y="110" width="3.2" height="4.2" rx="1.3" fill="#1e3a8a"/>
+        <rect x="62.4" y="110" width="3.2" height="4.2" rx="1.3" fill="#1e3a8a"/>
+        <!-- glass + roof -->
+        <path d="M40.6 108.5 Q50 103.5 59.4 108.5 L57.8 116.5 Q50 114 42.2 116.5 Z" fill="#0b1630" opacity=".9"/>
+        <rect x="41.6" y="117.5" width="16.8" height="14.5" rx="4" fill="url(#roofGrad)" stroke="rgba(255,255,255,.3)" stroke-width=".6"/>
+        <path d="M42 133.5 Q50 135.5 58 133.5 L59 138.5 Q50 140.5 41 138.5 Z" fill="#0b1630" opacity=".85"/>
+        <!-- headlights + taillights -->
+        <rect x="39" y="96.8" width="6.2" height="2.6" rx="1.2" fill="#fefce8"/>
+        <rect x="54.8" y="96.8" width="6.2" height="2.6" rx="1.2" fill="#fefce8"/>
+        <rect x="38.6" y="141.2" width="7" height="2.4" rx="1" fill="#dc2626"/>
+        <rect x="54.4" y="141.2" width="7" height="2.4" rx="1" fill="#dc2626"/>
+        <g class="night-fx tail-leds" filter="url(#carBlur)">
+          <circle cx="42" cy="142.4" r="3.6" fill="#ff3131"/><circle cx="58" cy="142.4" r="3.6" fill="#ff3131"/>
+        </g>
+      </svg>`;
+    this.carMarker = new maplibregl.Marker({ element: el, rotationAlignment: 'map', pitchAlignment: 'map' })
+      .setLngLat(CONFIG.defaultCenter)
+      .addTo(this.map);
+    document.body.dataset.cam = this.mode;
+  },
+
+  styleUrl() { return this.night ? CONFIG.styles.night : CONFIG.styles.day; },
+
+  setNight(night) {
+    if (night === this.night) return;
+    this.night = night;
+    Car3D.setNight(night);
+    this.map.setStyle(this.styleUrl(), { diff: false });
+  },
+
+  /** Custom layers are lost on every setStyle(), so they are (re)added here. */
+  onStyleLoad() {
+    const m = this.map;
+    const style = m.getStyle();
+
+    for (const l of style.layers) {
+      if (l.type === 'fill-extrusion') m.setLayoutProperty(l.id, 'visibility', 'none');
+    }
+    const labelLayer = style.layers.find((l) => l.type === 'symbol' && l.layout?.['text-field'])?.id;
+    const vectorSrc = style.sources.openmaptiles ? 'openmaptiles'
+      : Object.keys(style.sources).find((id) => style.sources[id].type === 'vector');
+
+    // ---- Directional light for extrusions: low warm sun by day, cool moonlight at night ----
+    m.setLight({
+      anchor: 'map',                         // light fixed in the world, so shading stays put while rotating
+      position: [1.4, 210, 40],              // [radial, azimuth°, polar°]: from the south-southwest
+      color: this.night ? '#a9bcff' : '#fff4e2',
+      intensity: this.night ? 0.3 : 0.42,
+    });
+
+    // ---- LUP (Light Up Parking): neon blue at night, deep blue by day ----
+    const lupVis = Settings.get('lup') ? 'visible' : 'none';
+    m.addSource('lg-parking', { type: 'geojson', data: this.data.parking });
+    m.addLayer({ id: 'lg-parking-fill', type: 'fill', source: 'lg-parking', layout: { visibility: lupVis },
+      paint: { 'fill-color': this.night ? '#0ea5e9' : '#1e3a8a', 'fill-opacity': ['match', ['get', 'kind'], 'space', this.night ? 0.4 : 0.5, this.night ? 0.28 : 0.4] } }, labelLayer);
+    m.addLayer({ id: 'lg-parking-glow', type: 'line', source: 'lg-parking', layout: { visibility: lupVis, 'line-join': 'round' },
+      paint: { 'line-color': '#22d3ee', 'line-width': 9, 'line-blur': 6, 'line-opacity': this.night ? 0.6 : 0 } }, labelLayer);
+    m.addLayer({ id: 'lg-parking-line', type: 'line', source: 'lg-parking', layout: { visibility: lupVis, 'line-join': 'round' },
+      paint: { 'line-color': this.night ? '#67e8f9' : '#1e40af', 'line-width': ['match', ['get', 'kind'], 'space', 1, 2.2] } }, labelLayer);
+    if (vectorSrc) {
+      // Parking points from the base tiles cover areas beyond the fetched polygons.
+      m.addLayer({ id: 'lg-parking-poi', type: 'circle', source: vectorSrc, 'source-layer': 'poi', layout: { visibility: lupVis },
+        filter: ['all', ['==', ['get', 'class'], 'parking'], ['!=', ['get', 'subclass'], 'bicycle_parking']],
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 3, 16, 7, 19, 10],
+          'circle-color': this.night ? '#22d3ee' : '#1e40af',
+          'circle-blur': this.night ? 0.5 : 0,
+          'circle-stroke-color': '#ffffff', 'circle-stroke-width': this.night ? 0 : 1.2,
+        } }, labelLayer);
+    }
+
+    // ---- Soft ground shadows: building footprints offset away from the light (NNE) ----
+    if (vectorSrc) {
+      m.addLayer({
+        id: 'lg-building-shadow',
+        type: 'fill',
+        source: vectorSrc,
+        'source-layer': 'building',
+        minzoom: 14,
+        paint: {
+          'fill-color': this.night ? '#000000' : '#1e293b',
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 14, 0, 15.5, this.night ? 0.4 : 0.16],
+          'fill-translate': ['interpolate', ['exponential', 2], ['zoom'], 15, ['literal', [2, -3]], 20, ['literal', [22, -30]]],
+          'fill-translate-anchor': 'map',
+          'fill-antialias': true,
+        },
+      }, labelLayer);
+    }
+
+    // ---- 3D building extrusions (OpenMapTiles "building" layer) ----
+    if (vectorSrc) {
+      // Height-tinted facades: taller buildings slightly cooler/darker, like atmospheric depth.
+      const colors = this.night ? ['#1c2338', 25, '#28324f', 80, '#323f66', 200, '#3f4f80'] : ['#efebe5', 25, '#e2ddd5', 80, '#d3ccc2', 200, '#c3c9d2'];
+      m.addLayer({
+        id: 'lg-buildings-3d',
+        type: 'fill-extrusion',
+        source: vectorSrc,
+        'source-layer': 'building',
+        minzoom: 14,
+        filter: ['!=', ['get', 'hide_3d'], true],
+        paint: {
+          'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 10], 0, ...colors],
+          'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 14, 0, 15.5, ['coalesce', ['get', 'render_height'], 10]],
+          'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+          'fill-extrusion-opacity': 0.9,
+          'fill-extrusion-vertical-gradient': true,
+        },
+      }, labelLayer);
+    }
+
+    // ---- GPS accuracy halo ----
+    m.addSource('lg-accuracy', { type: 'geojson', data: this.data.accuracy });
+    m.addLayer({ id: 'lg-accuracy-fill', type: 'fill', source: 'lg-accuracy', paint: { 'fill-color': '#38bdf8', 'fill-opacity': 0.12 } }, labelLayer);
+
+    // ---- Alternative routes ----
+    m.addSource('lg-route-alt', { type: 'geojson', data: this.data.alt });
+    m.addLayer({ id: 'lg-route-alt', type: 'line', source: 'lg-route-alt',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': this.night ? '#64748b' : '#94a3b8', 'line-width': 7, 'line-opacity': 0.75 } }, labelLayer);
+
+    // ---- Main route: neon glow + casing + gradient core ----
+    m.addSource('lg-route', { type: 'geojson', data: this.data.route, lineMetrics: true });
+    m.addLayer({ id: 'lg-route-glow', type: 'line', source: 'lg-route',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#38bdf8', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 10, 18, 30, 20, 44],
+        'line-blur': 14, 'line-opacity': this.night ? 0.6 : 0.4 } }, labelLayer);
+    m.addLayer({ id: 'lg-route-casing', type: 'line', source: 'lg-route',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': this.night ? '#e0f2fe' : '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 6, 18, 16, 20, 26], 'line-opacity': 0.9 } }, labelLayer);
+    m.addLayer({ id: 'lg-route-core', type: 'line', source: 'lg-route',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 4, 18, 11, 20, 18],
+        'line-gradient': ['interpolate', ['linear'], ['line-progress'], 0, '#06b6d4', 0.5, '#3b82f6', 1, '#a855f7'] } }, labelLayer);
+
+    // ---- Sky / horizon haze: needed once the camera tilts toward the horizon ----
+    try {
+      m.setSky(this.night
+        ? { 'sky-color': '#0b1226', 'horizon-color': '#1e2a4a', 'fog-color': '#0f172a', 'sky-horizon-blend': 0.6, 'horizon-fog-blend': 0.7, 'fog-ground-blend': 0.5, 'atmosphere-blend': 0.6 }
+        : { 'sky-color': '#7cc4ff', 'horizon-color': '#e6f2ff', 'fog-color': '#eef3f9', 'sky-horizon-blend': 0.5, 'horizon-fog-blend': 0.6, 'fog-ground-blend': 0.4, 'atmosphere-blend': 0.6 });
+    } catch (e) { console.warn('[map] sky unsupported', e.message); }
+
+    // ---- 3D car (three.js custom layer, shares the depth buffer with buildings) ----
+    Car3D.night = this.night;
+    if (Car3D.supported()) {
+      try { m.addLayer(Car3D); } catch (e) { Car3D.fail(e); }
+    }
+    this.carMarker.getElement().style.display = Car3D.active() ? 'none' : '';
+  },
+
+  setParking(features) {
+    this.data.parking = { type: 'FeatureCollection', features };
+    this.map.getSource('lg-parking')?.setData(this.data.parking);
+  },
+
+  setParkingVisible(on) {
+    for (const id of ['lg-parking-fill', 'lg-parking-glow', 'lg-parking-line', 'lg-parking-poi']) {
+      if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+    }
+  },
+
+  setRoute(geometry) {
+    this.data.route = { type: 'FeatureCollection', features: geometry ? [{ type: 'Feature', geometry, properties: {} }] : [] };
+    this.map.getSource('lg-route')?.setData(this.data.route);
+  },
+
+  setAlternatives(geometries) {
+    this.data.alt = { type: 'FeatureCollection', features: geometries.map((g) => ({ type: 'Feature', geometry: g, properties: {} })) };
+    this.map.getSource('lg-route-alt')?.setData(this.data.alt);
+  },
+
+  setAccuracy(lngLat, radius) {
+    this.data.accuracy = { type: 'FeatureCollection', features: radius ? [Geo.circle(lngLat, radius)] : [] };
+    this.map.getSource('lg-accuracy')?.setData(this.data.accuracy);
+  },
+
+  /** Glowing, pulsing light pillar at the destination. Returns a token for timed removal. */
+  setDestination(lngLat, { arrived = false } = {}) {
+    this.destMarker?.remove();
+    this.destMarker = null;
+    this.destToken++;
+    if (!lngLat) return this.destToken;
+    const el = document.createElement('div');
+    el.className = 'dest-beacon' + (arrived ? ' arrived' : '');
+    el.innerHTML = '<div class="beacon-inner"><div class="ring"></div><div class="ring r2"></div><div class="beam"></div><div class="core"></div></div>';
+    this.destMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat(lngLat).addTo(this.map);
+    return this.destToken;
+  },
+
+  /** Fade + shrink the destination beacon away, then remove it. */
+  fadeOutDestination() {
+    if (!this.destMarker) return;
+    const token = this.destToken;
+    this.destMarker.getElement().classList.add('fading');
+    setTimeout(() => { if (this.destToken === token) this.setDestination(null); }, 1700);
+  },
+
+  /** Arrival: keep the same beacon (no colour change), pulse a little quicker. Returns its token. */
+  markArrived() {
+    this.destMarker?.getElement().classList.add('arrived');
+    return this.destToken;
+  },
+
+  /** Switch camera mode. While following, the render loop eases into it. */
+  setMode(mode) {
+    if (!CAMERA_MODES[mode]) return;
+    this.mode = mode;
+    const cfg = CAMERA_MODES[mode];
+    document.body.dataset.cam = mode;
+    if (!this.following) {
+      this.map.easeTo({ pitch: cfg.pitch, bearing: cfg.headingUp ? this.map.getBearing() : 0, duration: 900 });
+    }
+    UI.syncControls();
+  },
+
+  /** Vehicle marker, every frame. */
+  carScale: 0,
+  beamScale: '',
+  braking: false,
+
+  /**
+   * Vehicle marker, every frame: position, heading, real-world scale when
+   * zoomed in close (≈4.6 m car), beam length by speed, brake lights.
+   */
+  renderCar(lngLat, heading, kmh = 0, braking = false) {
+    const metersPerPx = (40075016.686 * Math.cos(lngLat[1] * Geo.RAD)) / (512 * 2 ** this.map.getZoom());
+    if (Car3D.active()) {
+      // Real size when close; never smaller than ~44 px long on screen.
+      Car3D.update(lngLat, heading, kmh, braking, Math.max(1, (44 * metersPerPx) / 4.5));
+      return;
+    }
+    this.carMarker.setLngLat(lngLat).setRotation(heading);
+    const el = this.carMarker.getElement();
+    const scale = clamp(4.6 / metersPerPx / 48, 1, 4);   // 48 px = drawn car length
+    if (Math.abs(scale - this.carScale) > 0.01) {
+      this.carScale = scale;
+      el.style.setProperty('--car-scale', scale.toFixed(3));
+    }
+    const beam = (0.75 + Math.min(kmh, 130) / 200).toFixed(2);
+    if (beam !== this.beamScale) {
+      this.beamScale = beam;
+      el.style.setProperty('--beam', beam);
+    }
+    if (braking !== this.braking) {
+      this.braking = braking;
+      el.classList.toggle('braking', braking);
+    }
+  },
+
+  /**
+   * Driving camera, every frame. Each property eases toward the target of the
+   * current mode, so following, auto-zoom and 2D/3D/CU3D switches all glide.
+   */
+  renderCamera(lngLat, heading, kmh, dt) {
+    if (!this.following) return;
+    const idle = Idle.active;
+    const cfg = idle ? IDLE_CAMERA : CAMERA_MODES[this.mode];
+    const h = this.map.getContainer().clientHeight;
+    const c = this.cam || (this.cam = {
+      center: this.map.getCenter().toArray(), bearing: this.map.getBearing(),
+      zoom: this.map.getZoom(), pitch: this.map.getPitch(), pad: this.map.getPadding().top || 0,
+      centerRate: 3,   // starts soft after a recenter, then tightens to lock onto the car
+      lock: 0,         // 0→1: bearing blends in, then is locked to the car
+      blend: 1,        // seconds the bearing blend takes (longer for the parked close-up)
+    });
+    c.centerRate = Math.min(30, c.centerRate + dt * 12);
+
+    const targetZoom = cfg.zoom(Settings.get('autoZoom') ? kmh : 30);
+    const targetBearing = idle ? heading + cfg.bearingOffset : cfg.headingUp ? heading : 0;
+    const prev = [c.center[0], c.center[1], c.bearing, c.zoom, c.pitch, c.pad];
+    // Entering/leaving the parked close-up: unlock the bearing and glide slowly.
+    if (c.idle !== idle) {
+      if (c.idle !== undefined) { c.lock = 0; c.blend = 2.5; }
+      c.idle = idle;
+    }
+    const rate = cfg.rate || 1;
+
+    c.center = Geo.lerp(c.center, lngLat, ease(dt, c.centerRate));
+    // Locked to the car's heading (no second smoothing stage = no lag or stutter in
+    // turns). Right after a recenter it blends in over ~1 s instead of jumping.
+    c.lock = Math.min(1, c.lock + dt / c.blend);
+    if (c.lock >= 1) c.blend = 1;
+    c.bearing = c.lock >= 1 ? targetBearing : Geo.lerpAngle(c.bearing, targetBearing, ease(dt, 4 / c.blend));
+    c.zoom += (targetZoom - c.zoom) * ease(dt, 1.4 * rate);
+    c.pitch += (cfg.pitch - c.pitch) * ease(dt, 2.4 * rate);
+    c.pad += (h * cfg.offset - c.pad) * ease(dt, 2.4 * rate);
+
+    // Skip the redraw when the camera has settled (saves battery when parked).
+    const moved = Math.abs(prev[0] - c.center[0]) + Math.abs(prev[1] - c.center[1]) > 1e-9
+      || Math.abs(prev[2] - c.bearing) > 0.01 || Math.abs(prev[3] - c.zoom) > 0.001
+      || Math.abs(prev[4] - c.pitch) > 0.01 || Math.abs(prev[5] - c.pad) > 0.5;
+    if (!moved) return;
+    this.map.jumpTo({ center: c.center, bearing: c.bearing, zoom: c.zoom, pitch: c.pitch, padding: { top: c.pad, bottom: 0, left: 0, right: 0 } });
+  },
+
+  setFollowing(on) {
+    this.following = on;
+    this.cam = null;   // re-seed from the current view so the return glides
+    $('#btn-recenter').classList.toggle('off', !on);
+  },
+
+  fitLine(coords) {
+    const b = coords.reduce((bb, c) => bb.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+    this.setFollowing(false);
+    this.map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
+    const small = window.innerWidth < 760;
+    this.map.fitBounds(b, {
+      padding: { top: small ? 110 : 120, bottom: small ? 290 : 280, left: 40, right: small ? 80 : 100 },
+      pitch: 0, bearing: 0, duration: 900, maxZoom: 16,
+    });
+  },
+};
+
+/* ==========================================================================
+   Car3D: a real 3D blue car rendered with three.js as a MapLibre custom layer
+   --------------------------------------------------------------------------
+   Built from simple meshes (no model download): body, glasshouse, roof,
+   wheels, head- and taillights. At night it adds headlight beams on the
+   asphalt, a red glow behind and LED halos; brake lights flare on braking.
+   Model space: x = east, y = north (forward), z = up, units = metres.
+   If three.js or WebGL fails, the flat SVG car marker is used instead.
+   ========================================================================== */
+const Car3D = {
+  id: 'lg-car-3d',
+  type: 'custom',
+  renderingMode: '3d',
+  failed: false,
+  ready: false,
+  night: false,
+  pos: null,
+  heading: 0,
+  kmh: 0,
+  braking: false,
+  scale: 1,
+
+  supported() { return !!window.THREE && !this.failed; },
+  active() { return this.supported() && this.ready; },
+  fail(e) {
+    console.warn('[car3d] falling back to flat marker:', e?.message || e);
+    this.failed = true;
+    this.ready = false;
+    MapView.carMarker.getElement().style.display = '';
+  },
+
+  onAdd(map, gl) {
+    try {
+      if (!this.renderer) {
+        this.renderer = new THREE.WebGLRenderer({ canvas: map.getCanvas(), context: gl, antialias: true });
+        this.renderer.autoClear = false;
+        this.camera = new THREE.Camera();
+        this.scene = new THREE.Scene();
+        this.build();
+      }
+      this.map = map;
+      this.ready = true;
+      this.applyLights();
+    } catch (e) { this.fail(e); }
+  },
+
+  onRemove() { this.ready = false; },
+
+  /** Canvas-drawn texture for the light effects. */
+  texture(draw, w = 128, h = 256) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    draw(c.getContext('2d'), w, h);
+    return new THREE.CanvasTexture(c);
+  },
+
+  build() {
+    const T = THREE;
+    // Light effects on the road live in their own scene, drawn in a separate pass (see render).
+    this.fxScene = new T.Scene();
+    this.fx = new T.Group();
+    this.fxScene.add(this.fx);
+    this.scene.add(new T.HemisphereLight(0xe0ecff, 0x334155, 0.95));
+    const sun = new T.DirectionalLight(0xffffff, 0.85);
+    sun.position.set(-0.6, -1, 2.2);
+    this.scene.add(sun);
+
+    const car = this.car = new T.Group();
+    this.scene.add(car);
+    const paint = new T.MeshStandardMaterial({ color: 0x2563eb, metalness: 0.5, roughness: 0.3 });
+    const glass = new T.MeshStandardMaterial({ color: 0x0b1220, metalness: 0.4, roughness: 0.12 });
+    const trim = new T.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
+    const tyre = new T.MeshStandardMaterial({ color: 0x0f0f10, roughness: 0.9 });
+    const box = (w, l, h, mat, x, y, z) => {
+      const m = new T.Mesh(new T.BoxGeometry(w, l, h), mat);
+      m.position.set(x, y, z);
+      car.add(m);
+      return m;
+    };
+    box(1.86, 4.5, 0.6, paint, 0, 0, 0.56);          // lower body
+    box(1.84, 0.9, 0.12, paint, 0, 1.6, 0.9);         // bonnet top
+    box(1.66, 2.25, 0.52, glass, 0, -0.25, 1.11);     // glasshouse
+    box(1.56, 1.85, 0.08, paint, 0, -0.32, 1.4);      // roof
+    box(1.9, 0.18, 0.22, trim, 0, 2.2, 0.4);          // front bumper
+    box(1.9, 0.18, 0.22, trim, 0, -2.2, 0.4);         // rear bumper
+    const wheel = new T.CylinderGeometry(0.34, 0.34, 0.24, 20);
+    wheel.rotateZ(Math.PI / 2);
+    for (const x of [-0.84, 0.84]) for (const y of [-1.45, 1.45]) {
+      const w = new T.Mesh(wheel, tyre);
+      w.position.set(x, y, 0.34);
+      car.add(w);
+    }
+
+    // Lights
+    this.headMat = new T.MeshBasicMaterial({ color: 0xe2e8f0 });
+    this.tailMat = new T.MeshBasicMaterial({ color: 0x991b1b });
+    for (const x of [-0.62, 0.62]) {
+      box(0.42, 0.06, 0.13, this.headMat, x, 2.26, 0.66);
+      box(0.46, 0.06, 0.13, this.tailMat, x, -2.26, 0.72);
+    }
+
+    // Headlight beams: additive ground quad, pivot at the front bumper so it stretches forward.
+    const beamTex = this.texture((g, w, h) => {
+      g.filter = 'blur(6px)';
+      const grad = g.createLinearGradient(0, h, 0, 0);
+      grad.addColorStop(0, 'rgba(255,246,220,0.9)');
+      grad.addColorStop(0.4, 'rgba(255,236,184,0.32)');
+      grad.addColorStop(1, 'rgba(255,236,184,0)');
+      g.fillStyle = grad;
+      g.beginPath();
+      g.moveTo(w * 0.3, h); g.lineTo(w * 0.7, h); g.lineTo(w * 0.98, 6); g.lineTo(w * 0.02, 6);
+      g.closePath();
+      g.fill();
+    });
+    const beamGeo = new T.PlaneGeometry(7, 16);
+    beamGeo.translate(0, 8, 0);
+    const glowMat = (map) => new T.MeshBasicMaterial({ map, transparent: true, blending: T.AdditiveBlending, depthWrite: false });
+    this.beams = new T.Mesh(beamGeo, glowMat(beamTex));
+    this.beams.position.set(0, 2.3, 0.06);
+    this.fx.add(this.beams);
+
+    // Red glow on the road behind + LED halos facing backwards.
+    const redTex = this.texture((g, w, h) => {
+      const grad = g.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
+      grad.addColorStop(0, 'rgba(255,40,40,0.85)');
+      grad.addColorStop(1, 'rgba(255,40,40,0)');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, w, h);
+    }, 64, 64);
+    this.tailGlow = new T.Mesh(new T.PlaneGeometry(3.4, 2.4), glowMat(redTex));
+    this.tailGlow.position.set(0, -3.3, 0.06);
+    this.fx.add(this.tailGlow);
+    this.halos = [-0.62, 0.62].map((x) => {
+      const halo = new T.Mesh(new T.PlaneGeometry(0.95, 0.6), glowMat(redTex));
+      halo.rotation.x = Math.PI / 2;           // stand the quad up, facing backwards (-y)
+      halo.position.set(x, -2.32, 0.72);
+      car.add(halo);
+      return halo;
+    });
+    // The car is tiny next to the map's coordinate span; never let three.js cull it.
+    for (const g of [this.car, this.fx]) g.traverse((o) => { o.frustumCulled = false; });
+  },
+
+  /** Night / brake light state. */
+  applyLights() {
+    if (!this.car) return;
+    const lit = this.night || this.braking;
+    this.beams.visible = this.night;
+    this.tailGlow.visible = lit;
+    this.halos.forEach((h) => { h.visible = lit; h.scale.setScalar(this.braking ? 1.45 : 1); });
+    this.tailGlow.scale.setScalar(this.braking ? 1.35 : 1);
+    this.tailMat.color.set(lit ? 0xff2424 : 0x991b1b);
+    this.headMat.color.set(this.night ? 0xffffff : 0xe2e8f0);
+  },
+
+  update(lngLat, heading, kmh, braking, scale) {
+    const beam = 0.75 + Math.min(kmh, 130) / 200;
+    const changed = !this.pos || lngLat[0] !== this.pos[0] || lngLat[1] !== this.pos[1] || heading !== this.heading
+      || scale !== this.scale || braking !== this.braking || (this.beams && Math.abs(this.beams.scale.y - beam) > 0.005);
+    this.pos = lngLat;
+    this.heading = heading;
+    this.scale = scale;
+    if (braking !== this.braking) { this.braking = braking; this.applyLights(); }
+    if (this.beams) this.beams.scale.y = beam;
+    if (changed) this.map?.triggerRepaint();   // a parked car doesn't keep the GPU busy
+  },
+
+  setNight(night) {
+    this.night = night;
+    this.applyLights();
+    this.map?.triggerRepaint();
+  },
+
+  render(gl, matrix) {
+    if (!this.pos || !this.ready) return;
+    try {
+      const T = THREE;
+      const mc = maplibregl.MercatorCoordinate.fromLngLat(this.pos, 0);
+      const s = mc.meterInMercatorCoordinateUnits() * this.scale;
+      const rot = -this.heading * Geo.RAD;   // heading is clockwise from north
+      this.car.rotation.z = rot;
+      this.fx.rotation.z = rot;
+      // Mercator y grows southward, so flip y to keep "north = +y" in model space.
+      const model = new T.Matrix4().makeTranslation(mc.x, mc.y, mc.z).scale(new T.Vector3(s, -s, s));
+      this.camera.projectionMatrix = new T.Matrix4().fromArray(matrix).multiply(model);
+      const r = this.renderer;
+      r.resetState();
+      // Pass 1: light on the road (beams, rear glow), depth-tested against the
+      // buildings so a beam never paints across a facade.
+      if (this.night || this.braking) r.render(this.fxScene, this.camera);
+      // Pass 2: the car itself, after clearing depth, so it is drawn over
+      // everything already on screen. In CU3D and the parked close-up the
+      // camera sits low behind or beside the car; without this a building
+      // between camera and car (in a bend, next to a parking spot) hides it.
+      r.state.buffers.depth.setMask(true);
+      r.state.buffers.depth.setClear(1);
+      r.clearDepth();
+      r.render(this.scene, this.camera);
+    } catch (e) { this.fail(e); }
+  },
+};
+
+/* ==========================================================================
+   Motion: what is *drawn* — vehicle position, heading and speed.
+   --------------------------------------------------------------------------
+   Waze-style dead reckoning: between ~1 Hz GPS fixes the car keeps moving at
+   its last known speed along its predicted path, and the drawn position eases
+   toward that prediction every frame. That removes the one-fix lag of plain
+   interpolation, so accelerating and cornering respond immediately.
+   - On a route (GPS snapped, or the simulator): the car is placed on the
+     route's driving Curve by route distance, so it follows the blue line and
+     steers through rounded corners; heading = the curve's tangent.
+   - Free (no route / off route): prediction runs along the GPS heading.
+   Heading always goes through a critically damped spring (no snap, no spin),
+   and the camera uses that same heading, so car and view turn as one.
+   ========================================================================== */
+const Motion = {
+  has: false,
+  pos: null,
+  heading: 0,
+  speed: 0,             // drawn speed, km/h
+  targetHeading: null,
+  targetSpeed: 0,
+  headingVel: 0,        // deg/s, state of the heading spring
+  accel: 0,             // smoothed km/h per second, for brake lights
+  direct: false,
+  fixAt: 0,             // performance.now() of the last fix
+  fixSpeed: 0,          // m/s at the last fix
+  fixPos: null,
+  // route mode
+  line: null,
+  curve: null,
+  along: null,
+  fixAlong: 0,
+  PREDICT_MAX_S: 1.2,   // stop extrapolating if fixes stop arriving
+
+  /** New fix. snap = { line, along } when it was matched onto the active route. */
+  pushFix(fix, snap) {
+    this.fixAt = performance.now();
+    this.fixSpeed = fix.speedKmh / 3.6;
+    this.targetSpeed = fix.speedKmh;
+    this.has = true;
+
+    if (snap) {
+      const jump = this.line !== snap.line || this.along == null || Math.abs(snap.along - this.along) > 150;
+      this.line = snap.line;
+      this.curve = Curve.for(snap.line);
+      this.fixAlong = snap.along;
+      if (jump) {
+        const at = this.curve.at(snap.along);
+        this.along = snap.along;
+        this.pos = at.pos;
+        this.heading = at.heading;
+        this.headingVel = 0;
+      }
+      return;
+    }
+
+    this.line = null;
+    this.along = null;
+    this.fixPos = fix.lngLat;
+    if (!this.pos || Geo.distance(this.pos, fix.lngLat) > 400) {
+      this.pos = fix.lngLat;   // first fix or a big jump: teleport
+      if (fix.heading != null) { this.heading = fix.heading; this.headingVel = 0; }
+    }
+    // GPS headings are noise when (nearly) stationary: keep the last good one.
+    if (fix.heading != null && fix.speedKmh > 3) this.targetHeading = fix.heading;
+  },
+
+  /** Simulator: exact route distance each frame (no prediction needed). */
+  setRouteDirect(line, along, speedKmh) {
+    const first = !this.has || this.line !== line;
+    this.direct = true;
+    this.has = true;
+    this.line = line;
+    this.curve = Curve.for(line);
+    this.along = along;
+    this.targetSpeed = speedKmh;
+    if (first) { this.heading = this.curve.at(along).heading; this.headingVel = 0; }
+  },
+
+  release() {
+    this.direct = false;
+    this.line = null;
+    this.curve = null;
+    this.fixPos = this.pos;
+    this.fixSpeed = 0;
+    this.targetSpeed = 0;   // the simulator stopped: the speedometer (and parked view) must see 0
+  },
+
+  /** Distance along the active navigation route of the drawn car, or null. */
+  routeAlong() {
+    if (!Nav.active || !Nav.line) return null;
+    if (this.line === Nav.line || (this.line && this.line.coords === Nav.line.coords)) return this.along;
+    return null;
+  },
+
+  get braking() { return this.accel < -4 && this.speed > 3; },
+
+  /**
+   * Critically damped spring toward the target heading (SmoothDamp on the
+   * shortest arc): quick and responsive like Waze, never overshoots, and the
+   * turn rate is capped so a noisy heading can never make the car spin.
+   */
+  stepHeading(dt, smoothTime) {
+    if (this.targetHeading == null || dt <= 0) return;
+    const maxRate = 240;
+    const omega = 2 / smoothTime, x = omega * dt;
+    const decay = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+    const change = clamp(-Geo.angleDiff(this.heading, this.targetHeading), -maxRate * smoothTime, maxRate * smoothTime);
+    const temp = (this.headingVel + omega * change) * dt;
+    this.headingVel = (this.headingVel - omega * temp) * decay;
+    this.heading = (this.heading + (-change + (change + temp) * decay) + 360) % 360;
+  },
+
+  /** Advance one frame. Returns false until there is a position to draw. */
+  step(now, dt) {
+    if (!this.has) return false;
+    const since = Math.min((now - this.fixAt) / 1000, this.PREDICT_MAX_S);
+    if (this.line) {
+      if (!this.direct) {
+        const predicted = this.fixAlong + this.fixSpeed * since;
+        const diff = predicted - this.along;
+        // Small backward corrections are ignored: the car never rolls back on GPS jitter.
+        if (diff > 0 || diff < -30) this.along += diff * ease(dt, 6);
+      }
+      const at = this.curve.at(this.along);
+      this.pos = at.pos;
+      this.targetHeading = at.heading;
+    } else if (!this.direct && this.fixPos) {
+      const predicted = this.fixSpeed > 0.8 && this.targetHeading != null
+        ? Geo.destination(this.fixPos, this.targetHeading, this.fixSpeed * since)
+        : this.fixPos;
+      this.pos = Geo.lerp(this.pos, predicted, ease(dt, 6));
+    }
+    // The curve tangent is already continuous, so only light smoothing on a route;
+    // raw GPS headings are noisier and get more.
+    this.stepHeading(dt, this.line ? 0.1 : 0.25);
+    const prevSpeed = this.speed;
+    this.speed += (this.targetSpeed - this.speed) * ease(dt, 5);
+    if (dt > 0) this.accel += ((this.speed - prevSpeed) / dt - this.accel) * ease(dt, 3);
+    return true;
+  },
+};
+
+/* ==========================================================================
+   Idle: detects "parked in free driving" for the Tesla-style close-up
+   ========================================================================== */
+const Idle = {
+  active: false,
+  since: 0,
+  DELAY_MS: 2000,      // brief stops (e.g. a give-way) don't trigger it
+
+  tick(now) {
+    const still = !Nav.active && !Sim.active && GPS.last && GPS.speedKmh === 0 && Motion.speed < 0.5 && MapView.following;
+    if (!still) {
+      this.since = 0;
+      if (this.active) this.set(false);   // moving again: glide straight back out
+      return;
+    }
+    if (!this.since) this.since = now;
+    if (!this.active && now - this.since > this.DELAY_MS) this.set(true);
+  },
+
+  set(on) {
+    this.active = on;
+    document.body.classList.toggle('idle', on);
+  },
+};
+
+/* ==========================================================================
+   Renderer: the single requestAnimationFrame loop
+   ========================================================================== */
+const Renderer = {
+  last: 0,
+  start() { requestAnimationFrame((t) => this.frame(t)); },
+  frame(now) {
+    const dt = this.last ? Math.min(0.1, (now - this.last) / 1000) : 1 / 60;
+    this.last = now;
+    Sim.frame(dt);
+    Idle.tick(now);
+    if (Motion.step(now, dt)) {
+      MapView.renderCar(Motion.pos, Motion.heading, Motion.speed, Motion.braking);
+      // Camera bearing = the car's own smoothed heading: car and view turn as one.
+      MapView.renderCamera(Motion.pos, Motion.heading, Motion.speed, dt);
+      UI.renderSpeedValue(Motion.speed);
+      const along = Motion.routeAlong();
+      SpeedLimit.tick(now, Motion.pos, Motion.heading, along);
+      if (along != null) UI.tickNav(along);   // header distance counts down every frame
+    }
+    requestAnimationFrame((t) => this.frame(t));
+  },
+};
+
+/* ==========================================================================
+   GPS: HTML5 Geolocation, speed/heading derivation, demo fallback
+   ========================================================================== */
+const GPS = {
+  mode: 'none',          // 'gps' | 'sim' | 'default' | 'none'
+  watchId: null,
+  last: null,            // { lngLat, t, accuracy }
+  speedKmh: 0,
+  heading: null,
+  accuracy: null,
+  realAvailable: false,
+
+  start() {
+    if (!('geolocation' in navigator)) return this.useDefault('Geolocation is not supported in this browser');
+    if (this.watchId != null) return;
+    this.watchId = navigator.geolocation.watchPosition(
+      (p) => this.onRaw(p, 'gps'),
+      (err) => this.onError(err),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
+    );
+    UI.setGpsLabel('Searching…');
+  },
+
+  onError(err) {
+    if (err.code === err.PERMISSION_DENIED) this.useDefault('Location permission denied');
+    else if (!this.last) this.useDefault('No GPS signal');
+    else UI.toast(`GPS: ${err.message || 'signal lost'}`);
+  },
+
+  /** Static fallback position so the app is usable without GPS. */
+  useDefault(reason) {
+    if (this.mode === 'default' || this.realAvailable) return;
+    this.mode = 'default';
+    UI.toast(`${reason}. Showing the demo location — tap ▶ to simulate a drive.`, 6000);
+    this.onRaw({ coords: { longitude: CONFIG.defaultCenter[0], latitude: CONFIG.defaultCenter[1], accuracy: null, speed: 0, heading: null }, timestamp: Date.now() }, 'default');
+  },
+
+  /** Normalise a Geolocation-shaped position (real or simulated) and publish it. */
+  onRaw(p, source) {
+    if (source === 'gps') {
+      this.realAvailable = true;
+      if (Sim.active) return;            // the simulator owns the position while running
+    }
+    const c = p.coords;
+    const lngLat = [c.longitude, c.latitude];
+    const t = p.timestamp || Date.now();
+    const moved = this.last ? Geo.distance(this.last.lngLat, lngLat) : 0;
+
+    // Speed: receiver's Doppler speed (m/s) when present, else distance / time.
+    let speed = (c.speed != null && Number.isFinite(c.speed) && c.speed >= 0) ? c.speed * 3.6 : null;
+    if (speed == null && this.last) {
+      const dt = (t - this.last.t) / 1000;
+      const noise = (c.accuracy || 10) * 0.5;
+      speed = dt > 0.3 && moved > noise ? (moved / dt) * 3.6 : 0;
+    }
+    speed ??= 0;
+    this.speedKmh = source === 'sim' || !this.last ? speed : this.speedKmh * 0.35 + speed * 0.65;
+    if (this.speedKmh < 1.5) this.speedKmh = 0;
+
+    // Heading: receiver heading while moving, else bearing between fixes.
+    let heading = (c.heading != null && Number.isFinite(c.heading) && speed > 4) ? c.heading : null;
+    if (heading == null && this.last && moved > 4) heading = Geo.bearing(this.last.lngLat, lngLat);
+    if (heading != null) this.heading = heading;
+
+    this.mode = source;
+    this.accuracy = c.accuracy;
+    this.last = { lngLat, t, accuracy: c.accuracy };
+    Bus.emit('position', this.lastPosition());
+  },
+
+  lastPosition() {
+    return { lngLat: this.last.lngLat, speedKmh: this.speedKmh, heading: this.heading, accuracy: this.accuracy, source: this.mode, t: this.last.t };
+  },
+
+  signalLevel() {
+    if (this.mode === 'sim') return 4;
+    const a = this.accuracy;
+    if (a == null || this.mode !== 'gps' || Date.now() - this.last.t > 15000) return 0;
+    return a <= 10 ? 4 : a <= 25 ? 3 : a <= 60 ? 2 : a <= 150 ? 1 : 0;
+  },
+};
+
+/* ==========================================================================
+   Sim: drives along a route at realistic speeds, advanced every frame
+   ========================================================================== */
+const Sim = {
+  active: false,
+  line: null,
+  along: 0,             // metres driven along the route
+  speedMs: 0,
+  segSpeeds: null,      // OSRM typical speed per segment (m/s)
+  scale: 1,             // time multiplier 1×, 2×, 4×
+  clock: 0,             // simulated epoch ms
+  lastEmit: 0,
+
+  start(route) {
+    this.stop(true);
+    this.line = new Line(route.geometry.coordinates);
+    this.segSpeeds = route.legs?.[0]?.annotation?.speed || null;
+    this.along = 0;
+    this.speedMs = 0;
+    this.clock = Date.now();
+    this.lastEmit = -Infinity;
+    this.active = true;
+    MapView.setFollowing(true);
+    UI.syncControls();
+    UI.toast('Simulated drive started');
+  },
+
+  /** Called by the Renderer every frame. */
+  frame(realDt) {
+    if (!this.active) return;
+    const dt = realDt * this.scale;
+    this.clock += dt * 1000;
+
+    // Target: typical segment speed with a slow drift; accelerate ≤2.2 m/s², brake ≤3 m/s².
+    const base = this.segSpeeds?.[this.line.segmentAt(this.along)] ?? 13.9;
+    const target = clamp(base * (1 + 0.1 * Math.sin(this.clock / 9000)), 4, 36);
+    this.speedMs += clamp(target - this.speedMs, -3 * dt, 2.2 * dt);
+    this.along = Math.min(this.line.length, this.along + this.speedMs * dt);
+    const done = this.along >= this.line.length;
+
+    // The drawn car follows the route's smoothed driving curve (see Curve).
+    Motion.setRouteDirect(this.line, this.along, done ? 0 : this.speedMs * 3.6);
+    const lngLat = this.line.pointAt(this.along);
+    const heading = Curve.for(this.line).at(this.along).heading;
+
+    // Navigation, speed limit etc. run on ~1 Hz fixes like real GPS.
+    if (done || this.clock - this.lastEmit >= 1000) {
+      this.lastEmit = this.clock;
+      GPS.onRaw({ coords: { longitude: lngLat[0], latitude: lngLat[1], accuracy: 5, speed: done ? 0 : this.speedMs, heading }, timestamp: this.clock }, 'sim');
+    }
+    if (done) this.stop(true);
+  },
+
+  stop(silent = false) {
+    if (!this.active) return;
+    this.active = false;
+    Motion.release();
+    GPS.speedKmh = 0;   // the simulated car has stopped (a real GPS fix, if any, takes over)
+    if (GPS.realAvailable) GPS.mode = 'gps'; else if (GPS.mode === 'sim') GPS.mode = 'default';
+    UI.syncControls();
+    if (!silent) UI.toast('Simulation ended');
+  },
+
+  cycleScale() {
+    this.scale = { 1: 2, 2: 4, 4: 1 }[this.scale];
+    UI.syncControls();
+  },
+};
+
+/* ==========================================================================
+   SpeedLimit: legal limit of the road under the car, from OpenStreetMap
+   ========================================================================== */
+const IMPLICIT_LIMITS = {
+  'NL:urban': 50, 'NL:rural': 80, 'NL:trunk': 100, 'NL:motorway': 100, 'NL:zone30': 30, 'NL:zone60': 60,
+  // Belgium: federal and regional values used in maxspeed / maxspeed:type / source:maxspeed
+  'BE:urban': 50, 'BE-VLG:urban': 50, 'BE-WAL:urban': 50, 'BE-BRU:urban': 30,
+  'BE:rural': 90, 'BE-VLG:rural': 70, 'BE-WAL:rural': 90, 'BE-BRU:rural': 70,
+  'BE:motorway': 120, 'BE-VLG:motorway': 120, 'BE-WAL:motorway': 120, 'BE-BRU:motorway': 120, 'BE:trunk': 120,
+  'BE:living_street': 20, 'BE:cyclestreet': 30,
+  'DE:urban': 50, 'DE:rural': 100, 'DE:zone30': 30, 'DE:living_street': 7, 'DE:bicycle_road': 30,
+  'FR:urban': 50, 'FR:rural': 80, 'FR:motorway': 130, 'FR:zone30': 30,
+  'AT:urban': 50, 'AT:rural': 100, 'AT:motorway': 130, 'CH:urban': 50, 'CH:rural': 80, 'CH:motorway': 120,
+  'IT:urban': 50, 'IT:rural': 90, 'IT:motorway': 130, 'ES:urban': 50, 'ES:rural': 90, 'ES:motorway': 120,
+  'GB:nsl_single': 97, 'GB:nsl_dual': 113, 'GB:motorway': 113, 'DK:urban': 50, 'DK:rural': 80,
+  walk: 7, living_street: 15,
+};
+
+/**
+ * Appended to every road query: for each Belgian region, a marker element and
+ * then the ids of the queried roads (set .w) inside it. Overpass answers this
+ * from its area index, so each road arrives labelled Flanders / Wallonia /
+ * Brussels, which is exact at region borders.
+ */
+const REGION_QUERY = ['BE-VLG', 'BE-WAL', 'BE-BRU']
+  .map((code) => `area["ISO3166-2"="${code}"]->.a;way.w(area.a)->.in;make region code="${code}";out;.in out ids;`)
+  .join('');
+
+const UNKNOWN_LIMIT = { value: null, none: false, source: 'unknown' };
+
+/**
+ * Time-conditional limits, e.g. a school zone
+ * "maxspeed:conditional=30 @ (Mo-Fr 07:00-09:00,15:00-17:00)". Supports the
+ * opening-hours subset these use: weekday ranges/lists, time ranges, several
+ * rules separated by ";". Conditions the device can't check (wet, weight…)
+ * count as not applying.
+ */
+const Conditional = {
+  DAYS: ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'],
+
+  /** km/h of the first condition that applies at `now`, else null. */
+  active(raw, now = new Date()) {
+    if (!raw) return null;
+    for (const part of this.splitTop(String(raw))) {
+      const m = part.match(/^\s*(\d+)\s*(mph)?\s*@\s*(.+?)\s*$/i);
+      if (!m) continue;
+      const cond = m[3].replace(/^\((.*)\)$/, '$1');
+      if (this.matches(cond, now)) return m[2] ? Math.round(+m[1] * 1.609) : +m[1];
+    }
+    return null;
+  },
+
+  /** Split at ";" outside parentheses. */
+  splitTop(s) {
+    const out = [];
+    let depth = 0, cur = '';
+    for (const ch of s) {
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      if (ch === ';' && depth === 0) { out.push(cur); cur = ''; } else cur += ch;
+    }
+    if (cur.trim()) out.push(cur);
+    return out;
+  },
+
+  matches(cond, now) {
+    let hit = false;
+    for (const raw of cond.split(';')) {
+      const rule = raw.replace(/\b(PH|SH)\s+off\b/gi, '').trim();
+      if (!rule) continue;
+      const m = rule.match(/^((?:Mo|Tu|We|Th|Fr|Sa|Su)(?:\s*[-,]\s*(?:Mo|Tu|We|Th|Fr|Sa|Su))*)?\s*((?:\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}(?:\s*,\s*)?)+)?$/);
+      if (!m || (!m[1] && !m[2])) return false;   // not a time condition
+      if (this.dayOk(m[1], now) && this.timeOk(m[2], now)) hit = true;
+    }
+    return hit;
+  },
+
+  dayOk(spec, now) {
+    if (!spec) return true;
+    const today = now.getDay();
+    return spec.split(',').some((part) => {
+      const [a, b] = part.split('-').map((d) => this.DAYS.indexOf(d.trim()));
+      if (b === undefined) return a === today;
+      return a <= b ? today >= a && today <= b : today >= a || today <= b;
+    });
+  },
+
+  timeOk(spec, now) {
+    if (!spec) return true;
+    const t = now.getHours() * 60 + now.getMinutes();
+    return spec.split(',').some((r) => {
+      const m = r.match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+      if (!m) return false;
+      const a = +m[1] * 60 + +m[2], b = +m[3] * 60 + +m[4];
+      return a <= b ? t >= a && t < b : t >= a || t < b;   // overnight ranges wrap
+    });
+  },
+};
+
+/**
+ * Persistent cache of downloaded road tiles (IndexedDB): an area driven
+ * before has its speed limits instantly, before Overpass even answers.
+ */
+const RoadCache = {
+  db: undefined,
+  PREFIX: 'v1:',
+  open() {
+    if (this.db === undefined) {
+      this.db = new Promise((resolve) => {
+        try {
+          const req = indexedDB.open('glassway-roads', 1);
+          req.onupgradeneeded = () => req.result.createObjectStore('tiles');
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => resolve(null);
+          req.onblocked = () => resolve(null);
+        } catch { resolve(null); }
+      });
+    }
+    return this.db;
+  },
+  async get(key) {
+    const db = await this.open();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      try {
+        const r = db.transaction('tiles').objectStore('tiles').get(this.PREFIX + key);
+        r.onsuccess = () => resolve(r.result || null);
+        r.onerror = () => resolve(null);
+      } catch { resolve(null); }
+    });
+  },
+  async put(key, value) {
+    const db = await this.open();
+    try { db?.transaction('tiles', 'readwrite').objectStore('tiles').put(value, this.PREFIX + key); } catch { /* quota / private mode */ }
+  },
+};
+
+/**
+ * Speed limits are matched on the device against road data downloaded ahead
+ * of the car, so the sign changes the moment the car crosses into a new zone:
+ *  - Roads come in fixed ~2 km tiles (current tile, tiles ahead, tiles near an
+ *    edge), cached in IndexedDB. Each road carries its Belgian region.
+ *  - While navigating, every road along the route is fetched once and each
+ *    route segment is mapped to its road. OSM limits change only at nodes and
+ *    segment ends are nodes, so a per-frame lookup by route distance switches
+ *    exactly at the boundary.
+ *  - In free driving the road under the car is re-matched every frame it
+ *    moves, with hysteresis so junctions don't flicker and an exact switch
+ *    when the car passes the end of its current road.
+ *  - The limit itself comes from the road's tags (time windows, direction,
+ *    lanes, typed values), else from the Belgian rules (see inferred()).
+ */
+const SpeedLimit = {
+  current: UNKNOWN_LIMIT,
+  ways: new Map(),        // OSM way id -> { id, line, tags, region, endKeys, memo }
+  grid: new Map(),        // spatial index cell -> Set of way ids
+  vertices: new Map(),    // "lng,lat" of every vertex -> way ids (how roads connect)
+  tiles: new Map(),       // download tile -> 'loading' | 'loaded' | time of last failure
+  generation: 0,          // bumps whenever roads change (invalidates memos and route mapping)
+  CELL: 0.002,            // spatial index cell, degrees (~140 × 220 m)
+  TILE: [0.03, 0.02],     // download tile [lng, lat], degrees (~2.1 × 2.2 km in Belgium)
+  KEEP_TAG: /^(highway|name|ref|oneway|junction|living_street|cyclestreet|bicycle_road)$|maxspeed/,
+  // free driving
+  cur: null,              // road under the car { way, forward, score, dist, atEnd, gen }
+  lastPos: null,
+  lastHeading: null,
+  unknownSince: 0,
+  // navigation
+  routeLine: null,        // route Line that routeWays belongs to
+  routeWays: null,        // per route segment: { way, forward } | null
+  routeGen: -1,
+  routeToken: null,
+  lastRouteBuild: 0,
+
+  /* ---------- reading tags ---------- */
+
+  /** One maxspeed value → { value, none } or null: "50", "30 mph", "none", "BE-VLG:rural", "BE:zone30", "BE:30". */
+  parseValue(raw, region = null) {
+    if (raw == null) return null;
+    const v = String(raw).split(';')[0].trim();
+    if (!v) return null;
+    if (v === 'none') return { value: null, none: true };
+    let m = v.match(/^(\d+(?:\.\d+)?)\s*(mph|km\/h|kmh|kph)?$/i);
+    if (m) return { value: Math.round(/mph/i.test(m[2] || '') ? +m[1] * 1.609 : +m[1]), none: false };
+    // Federal values the regions have since changed: Flanders rural 70 (2017), Brussels 30 (2021).
+    if (v === 'BE:rural' && region === 'BE-VLG') return { value: 70, none: false };
+    if (v === 'BE:urban' && region === 'BE-BRU') return { value: 30, none: false };
+    if (IMPLICIT_LIMITS[v] != null) return { value: IMPLICIT_LIMITS[v], none: false };
+    m = v.match(/^[A-Z]{2}(?:-[A-Z]{2,3})?:(?:zone:?)?(\d+)$/i);
+    if (m) return { value: +m[1], none: false };
+    return null;
+  },
+
+  /** Limit from the road's own tags: active time window, signed value (per direction / lanes), typed value. */
+  explicit(way, forward) {
+    const t = way.tags, dir = forward ? 'forward' : 'backward';
+    const cond = Conditional.active(t[`maxspeed:${dir}:conditional`]) ?? Conditional.active(t['maxspeed:conditional']);
+    if (cond != null) return { value: cond, none: false, source: 'conditional' };
+    const lanes = t[`maxspeed:lanes:${dir}`] || t['maxspeed:lanes'];
+    const lanesMax = lanes ? Math.max(...lanes.split('|').map(parseFloat).filter((x) => x > 0)) : NaN;
+    for (const raw of [t[`maxspeed:${dir}`], t.maxspeed, Number.isFinite(lanesMax) ? String(lanesMax) : null]) {
+      const v = this.parseValue(raw, way.region);
+      if (v) return { ...v, source: 'sign' };
+    }
+    for (const key of ['maxspeed:type', 'source:maxspeed', 'zone:maxspeed']) {
+      const v = this.parseValue(t[key], way.region);
+      if (v) return { ...v, source: 'type' };
+    }
+    return null;
+  },
+
+  /**
+   * No limit tagged on this road: derive it the way the Belgian rules do.
+   * Woonerf 20 / fietsstraat 30 → the same street continuing (a limit holds
+   * until the next sign, so the stretch behind the car is checked first) →
+   * motorway 120 → Brussels Region 30 → a side street whose connected streets
+   * all share one limit (a zone) → residential street in a built-up area 50.
+   * Anything else stays unknown rather than guessed.
+   */
+  inferred(way, forward) {
+    const t = way.tags, hw = t.highway || '', region = way.region;
+    const rule = (value, source) => ({ value, none: false, source });
+    if (region && (hw === 'living_street' || t.living_street === 'yes')) return rule(20, 'BE:living_street');
+    if (region && (t.cyclestreet === 'yes' || t.bicycle_road === 'yes')) return rule(30, 'BE:cyclestreet');
+    const label = t.name || t.ref;
+    if (label) {
+      const c = this.walk(way, way.endKeys[forward ? 0 : 1], label) || this.walk(way, way.endKeys[forward ? 1 : 0], label);
+      if (c) return { ...c, source: 'continuation' };
+    }
+    if (!region) return null;   // the rules below are Belgian
+    if (hw === 'motorway') return rule(120, 'BE:motorway');
+    if (region === 'BE-BRU') return rule(30, 'BE-BRU:urban');
+    if (/^(residential|unclassified|service)$/.test(hw)) {
+      const z = this.zone(way);
+      if (z) return { ...z, source: 'zone' };
+    }
+    if (hw === 'residential') return rule(50, `${region}:urban`);
+    return null;
+  },
+
+  /** Follow the same street (same name/ref) from a vertex; first tagged limit found. */
+  walk(from, key, label, depth = 4) {
+    const seen = new Set([from.id]);
+    let keys = [key];
+    for (let d = 0; d < depth && keys.length; d++) {
+      const next = [];
+      for (const k of keys) {
+        for (const id of this.vertices.get(k) || []) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+          const w = this.ways.get(id);
+          if ((w.tags.name || w.tags.ref) !== label) continue;
+          const e = this.explicit(w, true);
+          if (e) return e;
+          next.push(w.endKeys[0] === k ? w.endKeys[1] : w.endKeys[0]);
+        }
+      }
+      keys = next;
+    }
+    return null;
+  },
+
+  /** Tagged side streets meeting this one at its ends all share one limit (≥2 of them, none different). */
+  zone(way) {
+    const values = new Set();
+    let n = 0;
+    for (const k of way.endKeys) {
+      for (const id of this.vertices.get(k) || []) {
+        if (id === way.id) continue;
+        const w = this.ways.get(id);
+        if (!/^(residential|unclassified|tertiary|service)$/.test(w.tags.highway)) continue;
+        const e = this.explicit(w, true);
+        if (e?.value != null) { values.add(e.value); n++; }
+      }
+    }
+    return n >= 2 && values.size === 1 ? { value: [...values][0], none: false } : null;
+  },
+
+  /** Limit for driving along a way; cached, refreshed each minute (time windows) and when roads change. */
+  limitFor(way, forward) {
+    const minute = Math.floor(Date.now() / 60000);
+    const memo = way.memo || (way.memo = [null, null]);
+    const slot = forward ? 0 : 1;
+    const c = memo[slot];
+    if (c && c.gen === this.generation && c.minute === minute) return c.limit;
+    const limit = this.explicit(way, forward) || this.inferred(way, forward) || UNKNOWN_LIMIT;
+    memo[slot] = { gen: this.generation, minute, limit };
+    return limit;
+  },
+
+  /** Instant UI update whenever the displayed limit changes. */
+  set(next) {
+    const changed = next.value !== this.current.value || next.none !== this.current.none;
+    this.current = next;
+    if (!changed) return;
+    UI.renderLimit(next, true);
+    UI.checkOverspeed(Motion.speed);
+    UI.renderSpeedValue(Motion.speed, true);
+  },
+
+  /* ---------- road index ---------- */
+
+  cellKey(x, y) { return `${Math.floor(x / this.CELL)}:${Math.floor(y / this.CELL)}`; },
+  vkey(p) { return `${p[0].toFixed(7)},${p[1].toFixed(7)}`; },
+
+  /** Overpass JSON → compact roads (only the tags we use) + region per road id. */
+  parseResponse(data) {
+    const ways = [], regions = {};
+    let region = null;
+    for (const el of data?.elements || []) {
+      if (el.type === 'region') { region = el.tags?.code || null; continue; }
+      if (el.type !== 'way') continue;
+      if (region) { regions[el.id] = regions[el.id] || region; continue; }   // membership list after a marker
+      if (!el.geometry || el.geometry.length < 2) continue;
+      const tags = {};
+      for (const [k, v] of Object.entries(el.tags || {})) if (this.KEEP_TAG.test(k)) tags[k] = v;
+      ways.push({ id: el.id, tags, coords: el.geometry.map((g) => [g.lon, g.lat]) });
+    }
+    return { ways, regions };
+  },
+
+  /** Add (or with update, refresh the tags of) roads; returns how many changed. */
+  ingest({ ways, regions }, { update = false } = {}) {
+    if (this.ways.size > 60000) this.reset();
+    let changed = 0;
+    for (const w of ways) {
+      const known = this.ways.get(w.id);
+      if (known) {
+        if (update || (!known.region && regions[w.id])) {
+          known.tags = w.tags;
+          known.region = regions[w.id] || known.region;
+          known.memo = null;
+          changed++;
+        }
+        continue;
+      }
+      this.addWay(w, regions[w.id] || null);
+      changed++;
+    }
+    if (changed) this.generation++;
+    return changed;
+  },
+
+  addWay(w, region) {
+    const c = w.coords;
+    this.ways.set(w.id, { id: w.id, line: new Line(c), tags: w.tags, region, endKeys: [this.vkey(c[0]), this.vkey(c[c.length - 1])], memo: null });
+    const cells = new Set();
+    for (let i = 1; i < c.length; i++) {
+      const a = c[i - 1], b = c[i];
+      const n = Math.ceil(Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])) / (this.CELL / 2)) || 1;
+      for (let k = 0; k <= n; k++) { const p = Geo.lerp(a, b, k / n); cells.add(this.cellKey(p[0], p[1])); }
+    }
+    for (const cell of cells) {
+      if (!this.grid.has(cell)) this.grid.set(cell, new Set());
+      this.grid.get(cell).add(w.id);
+    }
+    for (const p of c) {
+      const k = this.vkey(p);
+      const list = this.vertices.get(k);
+      if (list) list.push(w.id); else this.vertices.set(k, [w.id]);
+    }
+  },
+
+  reset() {
+    this.ways.clear(); this.grid.clear(); this.vertices.clear(); this.tiles.clear();
+    this.cur = null;
+    this.generation++;
+  },
+
+  candidates(p) {
+    const cx = Math.floor(p[0] / this.CELL), cy = Math.floor(p[1] / this.CELL);
+    const ids = new Set();
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      const cell = this.grid.get(`${cx + dx}:${cy + dy}`);
+      if (cell) for (const id of cell) ids.add(id);
+    }
+    return ids;
+  },
+
+  /** 1 = one-way along the way, -1 = against it, 0 = two-way (motorways and roundabouts are implied one-way). */
+  oneway(w) {
+    const t = w.tags, o = t.oneway;
+    if (o === '-1' || o === 'reverse') return -1;
+    if (o === 'yes' || o === 'true' || o === '1') return 1;
+    if (o === 'no') return 0;
+    return t.junction === 'roundabout' || t.junction === 'circular' || t.highway === 'motorway' ? 1 : 0;
+  },
+
+  /** Score cached roads near p for a heading; returns the best and the current road's entry. */
+  match(p, heading) {
+    let best = null, current = null;
+    for (const id of this.candidates(p)) {
+      const w = this.ways.get(id);
+      const n = w.line.nearest(p);
+      if (n.dist > 30) continue;
+      const c = w.line.coords;
+      let score = n.dist, forward = true;
+      if (heading != null) {
+        const diff = Math.abs(Geo.angleDiff(heading, Geo.bearing(c[n.i], c[n.i + 1])));
+        forward = diff <= 90;
+        score += Math.min(diff, 180 - diff) * 0.4;                        // crossing roads
+        const ow = this.oneway(w);
+        if ((ow === 1 && !forward) || (ow === -1 && forward)) score += 25;  // other carriageway
+      }
+      if (w.tags.highway === 'service') score += 12;                      // parking aisles, driveways
+      const atEnd = (n.i === 0 && n.t <= 0) || (n.i === c.length - 2 && n.t >= 1);
+      const cand = { way: w, forward, score, dist: n.dist, atEnd };
+      if (this.cur && w === this.cur.way) current = cand;
+      if (!best || score < best.score) best = cand;
+    }
+    return { best, current };
+  },
+
+  /** Road under the car, with hysteresis: no flicker at junctions, but an exact switch at a road's end. */
+  pickWay(p, heading) {
+    const { best, current } = this.match(p, heading);
+    if (current && best && best.way !== current.way && !current.atEnd && current.dist < 12 && current.score < best.score + 4) {
+      return (this.cur = current);
+    }
+    return (this.cur = best);
+  },
+
+  /* ---------- downloading ---------- */
+
+  tileKey(p) { return `${Math.floor(p[0] / this.TILE[0])}:${Math.floor(p[1] / this.TILE[1])}`; },
+
+  /**
+   * Called on every fix: keep the tiles under the car, ahead of it (≥1 minute
+   * at the current speed) and across any nearby tile edge loaded.
+   */
+  ensureArea(p, heading, kmh = 0) {
+    const spots = [p];
+    if (heading != null) {
+      const ahead = Math.max(CONFIG.roadLookAheadM, (kmh / 3.6) * 60);
+      spots.push(Geo.destination(p, heading, ahead / 2), Geo.destination(p, heading, ahead));
+    }
+    for (const b of [0, 90, 180, 270]) spots.push(Geo.destination(p, b, CONFIG.roadEdgeMarginM));
+    for (const q of spots) {
+      const key = this.tileKey(q);
+      const st = this.tiles.get(key);
+      if (st === 'loading' || st === 'loaded' || (typeof st === 'number' && Date.now() - st < 15000)) continue;
+      this.loadTile(key);
+    }
+  },
+
+  async loadTile(key) {
+    this.tiles.set(key, 'loading');
+    const [x, y] = key.split(':').map(Number);
+    const w = x * this.TILE[0], s = y * this.TILE[1];
+    const bbox = [s, w, s + this.TILE[1], w + this.TILE[0]].map((v) => v.toFixed(5)).join(',');
+    const cached = await RoadCache.get(key);
+    if (cached) {
+      this.ingest(cached);
+      this.tiles.set(key, 'loaded');
+      if (Date.now() - cached.t < CONFIG.roadCacheMaxAgeMs) return;   // fresh enough
+    }
+    try {
+      const data = await Net.overpass(`[out:json][timeout:120];way(${bbox})${HIGHWAY_FILTER}->.w;.w out tags geom;${REGION_QUERY}`, 130000, cached ? 2 : 1);
+      const parsed = this.parseResponse(data);
+      this.ingest(parsed, { update: !!cached });
+      this.tiles.set(key, 'loaded');
+      RoadCache.put(key, { t: Date.now(), ...parsed });
+    } catch (e) {
+      console.warn(`[speedlimit] tile ${key} failed:`, e.message);
+      if (!cached) this.tiles.set(key, Date.now());   // retried after 15 s
+    }
+  },
+
+  /**
+   * Navigation: fetch every road along the route in one request, then map
+   * each route segment to its road. The corridor is a chain of small boxes,
+   * not Overpass's "around a line" filter, which one of the overpass-api.de
+   * servers silently answers with zero roads.
+   */
+  async loadRoute(line) {
+    const token = this.routeToken = {};
+    this.routeLine = line;
+    this.buildRouteWays(line);   // straight away, with the tiles already around the car
+    const step = Math.max(250, line.length / 300);
+    const boxes = [];
+    for (let d = 0; d < line.length; d += step) {
+      let s = 90, w = 180, n = -90, e = -180;
+      for (let x = d; x <= d + step; x += 20) {
+        const p = line.pointAt(Math.min(x, line.length));
+        s = Math.min(s, p[1]); n = Math.max(n, p[1]); w = Math.min(w, p[0]); e = Math.max(e, p[0]);
+      }
+      const padLat = 25 / 110540, padLng = 25 / (111320 * Math.cos(((s + n) / 2) * Geo.RAD));
+      boxes.push(`way(${(s - padLat).toFixed(6)},${(w - padLng).toFixed(6)},${(n + padLat).toFixed(6)},${(e + padLng).toFixed(6)})${HIGHWAY_FILTER};`);
+    }
+    try {
+      const data = await Net.overpass(`[out:json][timeout:150];(${boxes.join('')})->.w;.w out tags geom;${REGION_QUERY}`, 160000, 0);
+      if (token !== this.routeToken) return;   // route changed meanwhile
+      this.ingest(this.parseResponse(data));
+      this.buildRouteWays(line);
+    } catch (e) {
+      console.warn('[speedlimit] route corridor failed; using tiles around the car:', e.message);
+    }
+  },
+
+  /** Map each route segment to its road (by the segment's midpoint and direction). */
+  buildRouteWays(line) {
+    const out = new Array(Math.max(0, line.coords.length - 1)).fill(null);
+    for (let i = 0; i < out.length; i++) {
+      const a = line.coords[i], b = line.coords[i + 1];
+      if (Geo.distance(a, b) < 0.5) continue;
+      const { best } = this.match(Geo.lerp(a, b, 0.5), Geo.bearing(a, b));
+      if (best && best.dist < 12) out[i] = { way: best.way, forward: best.forward };
+    }
+    // Tiny unmatched junction pieces inherit the road before them (≤20 m in a row); a longer
+    // stretch without data stays empty, so the per-frame lookup falls back to free matching.
+    for (let i = 1, gap = 0; i < out.length; i++) {
+      if (out[i]) { gap = 0; continue; }
+      gap += line.cum[i + 1] - line.cum[i];
+      if (gap <= 20) out[i] = out[i - 1];
+    }
+    this.routeWays = out;
+    this.routeGen = this.generation;
+    this.lastRouteBuild = performance.now();
+  },
+
+  clearRoute() {
+    this.routeToken = null;
+    this.routeLine = null;
+    this.routeWays = null;
+  },
+
+  /* ---------- every frame ---------- */
+  tick(now, pos, heading, routeAlong) {
+    // New roads arrived: remap the route (at most once a second).
+    if (this.routeLine && this.routeLine === Nav.line && this.routeGen !== this.generation && now - this.lastRouteBuild > 1000) {
+      this.buildRouteWays(this.routeLine);
+    }
+    let pick = null;
+    if (routeAlong != null && this.routeWays && this.routeLine === Nav.line) {
+      pick = this.routeWays[Math.min(this.routeWays.length - 1, Nav.line.segmentAt(routeAlong))];
+    }
+    if (!pick) {
+      // Free driving: re-match whenever the drawn car moved ≥0.5 m, turned ≥4° or new roads arrived.
+      const moved = !this.lastPos || Geo.distance(this.lastPos, pos) >= 0.5
+        || Math.abs(Geo.angleDiff(this.lastHeading ?? 0, heading ?? 0)) >= 4 || this.cur?.gen !== this.generation;
+      if (moved) {
+        this.lastPos = pos;
+        this.lastHeading = heading;
+        if (this.pickWay(pos, heading)) this.cur.gen = this.generation;
+      }
+      pick = this.cur;
+      if (pick && !Nav.active) UI.setStreet(pick.way.tags.name || pick.way.tags.ref || 'Unnamed road');
+    }
+    if (!pick) return;
+    const lim = this.limitFor(pick.way, pick.forward);
+    // A brief unknown stretch (junction sliver, parking aisle) doesn't blank a known limit.
+    if (lim.value == null && !lim.none && this.current.value != null) {
+      this.unknownSince = this.unknownSince || now;
+      if (now - this.unknownSince < 2000) return;
+    } else {
+      this.unknownSince = 0;
+    }
+    this.set(lim);
+  },
+};
+
+/* ==========================================================================
+   Parking (LUP): parking lots / spaces from OpenStreetMap around the car
+   ========================================================================== */
+const Parking = {
+  areas: [],
+  ids: new Set(),
+  features: [],
+  fetching: false,
+  retryAt: 0,
+
+  ensure(p) {
+    if (!p || !Settings.get('lup') || this.fetching || Date.now() < this.retryAt) return;
+    if (this.areas.some((a) => Geo.distance(a.center, p) < a.r - 300)) return;
+    this.fetch(p, CONFIG.parkingRadiusM);
+  },
+
+  async fetch(center, r) {
+    this.fetching = true;
+    const [lng, lat] = center;
+    const q = `[out:json][timeout:60];(
+      way["amenity"="parking"](around:${r},${lat},${lng});
+      relation["amenity"="parking"](around:${r},${lat},${lng});
+      way["amenity"="parking_space"](around:${Math.round(r / 2)},${lat},${lng});
+    );out geom;`;
+    try {
+      const data = await Net.overpass(q, 90000, 2);
+      for (const el of data.elements || []) {
+        if (this.ids.has(el.id) || el.tags?.parking === 'underground') continue;
+        const kind = el.tags?.amenity === 'parking_space' ? 'space' : 'lot';
+        const rings = el.type === 'way' ? [el.geometry]
+          : (el.members || []).filter((m) => m.role === 'outer' && m.geometry).map((m) => m.geometry);
+        for (const g of rings) {
+          if (!g || g.length < 4) continue;
+          const ring = g.map((p) => [p.lon, p.lat]);
+          if (Geo.distance(ring[0], ring[ring.length - 1]) > 1) ring.push(ring[0]);   // close it
+          this.features.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] }, properties: { kind } });
+        }
+        this.ids.add(el.id);
+      }
+      this.areas.push({ center, r });
+      MapView.setParking(this.features);
+    } catch (e) {
+      console.warn('[lup] parking fetch failed:', e.message);
+      this.retryAt = Date.now() + 15000;
+    } finally {
+      this.fetching = false;
+    }
+  },
+};
+
+/* ==========================================================================
+   Search: Nominatim geocoding (debounced, ≤1 request/second per policy)
+   ========================================================================== */
+const Search = {
+  timer: null,
+  ctrl: null,
+  results: [],
+
+  onInput(q) {
+    clearTimeout(this.timer);
+    if (q.trim().length < 3) { UI.showHistory(); return; }
+    this.timer = setTimeout(() => this.query(q.trim()), 650);
+  },
+
+  async query(q) {
+    this.ctrl?.abort();
+    this.ctrl = new AbortController();
+    const c = GPS.last?.lngLat || CONFIG.defaultCenter;
+    const box = [c[0] - 0.6, c[1] + 0.4, c[0] + 0.6, c[1] - 0.4].join(',');   // bias, not bound
+    const url = `${CONFIG.nominatim}/search?format=jsonv2&limit=7&q=${encodeURIComponent(q)}&viewbox=${box}&accept-language=${navigator.language || 'en'}`;
+    try {
+      const data = await Net.json(url, { signal: this.ctrl.signal, headers: { Accept: 'application/json' } });
+      this.results = data.map((r) => {
+        const parts = r.display_name.split(', ');
+        const lngLat = [+r.lon, +r.lat];
+        return { title: r.name || parts[0], subtitle: parts.slice(1).join(', '), lngLat, dist: Geo.distance(c, lngLat) };
+      });
+      UI.renderResults(this.results);
+    } catch (e) {
+      if (e.name !== 'AbortError') UI.toast('Search failed — check your connection');
+    }
+  },
+
+  async reverse(lngLat) {
+    try {
+      const d = await Net.json(`${CONFIG.nominatim}/reverse?format=jsonv2&zoom=18&lat=${lngLat[1]}&lon=${lngLat[0]}`);
+      const a = d.address || {};
+      return [a.road && (a.road + (a.house_number ? ' ' + a.house_number : '')), a.city || a.town || a.village].filter(Boolean).join(', ')
+        || d.display_name?.split(', ').slice(0, 2).join(', ') || 'Dropped pin';
+    } catch {
+      return 'Dropped pin';
+    }
+  },
+};
+
+/** Recent destinations, newest first (localStorage). */
+const History = {
+  max: 8,
+  items() { return store.get('history', []); },
+  add(r) {
+    const list = this.items().filter((h) => !(h.title === r.title && Geo.distance(h.lngLat, r.lngLat) < 30));
+    list.unshift({ title: r.title, subtitle: r.subtitle || '', lngLat: r.lngLat, t: Date.now() });
+    store.set('history', list.slice(0, this.max));
+  },
+  clear() { store.set('history', []); },
+};
+
+/* ==========================================================================
+   Router: OSRM driving routes with alternatives
+   ========================================================================== */
+const Router = {
+  async route(from, to, { heading = null } = {}) {
+    const exclude = [];
+    if (Settings.get('avoidTolls')) exclude.push('toll');
+    if (Settings.get('avoidHighways')) exclude.push('motorway');
+
+    const base = `${CONFIG.osrm}/route/v1/driving/${from[0]},${from[1]};${to[0]},${to[1]}`
+      + '?overview=full&geometries=geojson&steps=true&alternatives=3&annotations=duration,speed'
+      // When rerouting, start in the direction we are driving (no instant U-turns).
+      + (heading != null ? `&bearings=${Math.round(heading) % 360},60;` : '');
+    let data;
+    let excluded = false;
+    try {
+      data = await Net.json(base + (exclude.length ? `&exclude=${exclude.join(',')}` : ''), {}, 15000);
+      excluded = exclude.length > 0;
+    } catch (e) {
+      if (!exclude.length) throw e;
+      data = await Net.json(base, {}, 15000);   // server without exclude support
+    }
+    if (data.code !== 'Ok' || !data.routes?.length) throw new Error(data.message || 'No route found');
+
+    const routes = data.routes;   // OSRM returns them fastest first
+    if (Settings.get('routePreference') === 'shortest') routes.sort((a, b) => a.distance - b.distance);
+
+    if (exclude.length && !excluded) {
+      // Fall back to preferring alternatives that touch the unwanted road classes least.
+      const hasClassData = routes.some((r) => r.legs.some((l) => l.steps.some((s) => s.intersections?.some((x) => x.classes))));
+      if (!hasClassData) {
+        UI.toast('This routing server cannot avoid tolls/highways — showing normal routes', 5000);
+        return routes;
+      }
+      for (const r of routes) r.avoidPenalty = this.classHits(r, exclude);
+      routes.sort((a, b) => a.avoidPenalty - b.avoidPenalty);
+      if (routes[0].avoidPenalty > 0) UI.toast(`No alternative fully avoids ${exclude.map((c) => (c === 'toll' ? 'tolls' : 'highways')).join(' and ')}`, 5000);
+    }
+    return routes;
+  },
+
+  classHits(route, classes) {
+    let n = 0;
+    for (const leg of route.legs) for (const step of leg.steps) for (const x of step.intersections || []) {
+      if (x.classes?.some((c) => classes.includes(c))) n++;
+    }
+    return n;
+  },
+};
+
+/* ==========================================================================
+   Nav: turn-by-turn guidance
+   ========================================================================== */
+const TURN_PATHS = {
+  straight: 'M24 42V8M13 19L24 8l11 11',
+  right: 'M14 42V27a7 7 0 0 1 7-7h17M30 12l8 8-8 8',
+  slight: 'M17 42V30L34 13M24 12h11v11',
+  sharp: 'M16 42V12l20 22M25 35h11V24',
+  uturn: 'M32 42V20a8 8 0 0 0-16 0v16M9 29l7 7 7-7',
+  roundabout: 'M24 42V31M24 31a8 8 0 1 1 7.5-5.2M28 13l8-6M29 6h7v7',
+  arrive: 'M24 43s-12-11-12-21a12 12 0 0 1 24 0c0 10-12 21-12 21zM24 18v.1',
+  depart: 'M24 42V8M13 19L24 8l11 11M16 42h16',
+};
+
+/** SVG markup for a maneuver arrow; left turns mirror the right-hand glyph. */
+function turnIcon(maneuver) {
+  const { type, modifier = 'straight' } = maneuver || {};
+  let key = 'straight';
+  if (type === 'arrive') key = 'arrive';
+  else if (type === 'depart') key = 'depart';
+  else if (type?.includes('roundabout') || type?.includes('rotary')) key = 'roundabout';
+  else if (modifier === 'uturn') key = 'uturn';
+  else if (modifier.includes('sharp')) key = 'sharp';
+  else if (modifier.includes('slight')) key = 'slight';
+  else if (modifier.includes('right') || modifier.includes('left')) key = 'right';
+  const mirror = modifier.includes('left') && key !== 'uturn' ? ' transform="translate(48 0) scale(-1 1)"' : '';
+  return `<path d="${TURN_PATHS[key]}"${mirror}/>`;
+}
+
+/** Human-readable instruction from an OSRM step, in the guidance language. */
+function instructionFor(step) {
+  const G = guide();
+  const m = step.maneuver;
+  const mod = m.modifier || '';
+  const name = step.name || step.ref || '';
+  const onto = name ? G.onto(name) : '';
+  const turn = G.turn[mod] || G.cont;
+  switch (m.type) {
+    case 'depart': return G.depart(G.compass[Math.round((m.bearing_after || 0) / 45) % 8], name ? G.on(name) : '');
+    case 'arrive': return G.arrive;
+    case 'roundabout':
+    case 'rotary': return G.roundabout(G.ordinal[(m.exit || 1) - 1] || String(m.exit), onto);
+    case 'roundabout turn': return G.roundaboutTurn(turn, onto);
+    case 'exit roundabout':
+    case 'exit rotary': return G.exitRoundabout(onto);
+    case 'merge': return G.merge(mod, onto);
+    case 'on ramp': return G.onRamp(mod, onto);
+    case 'off ramp': return G.offRamp(mod, step.destinations ? step.destinations.split(':').pop().trim() : '', onto);
+    case 'fork': return G.fork(mod.includes('left'), onto);
+    case 'end of road': return G.endOfRoad(turn, onto);
+    case 'continue':
+    case 'new name': return mod && mod !== 'straight' ? `${turn}${onto}` : G.follow(onto);
+    default: return `${turn}${onto}`;
+  }
+}
+
+const Nav = {
+  active: false,
+  route: null,
+  line: null,
+  dest: null,
+  destName: '',
+  steps: [],
+  stepStarts: [],
+  segDur: null,
+  remDurSuffix: [],
+  segIdx: 0,
+  traveled: 0,
+  offCount: 0,
+  lastReroute: 0,
+  rerouting: false,
+  announced: new Set(),
+  match: null,           // { along, onRoute } from the latest fix
+  nextManeuverAt: 0,     // distance along the route of the upcoming maneuver
+  candidates: [],
+  selected: 0,
+
+  /** Show route options from the current position to a destination. */
+  async preview(dest, name) {
+    if (this.active) this.stop(true);
+    this.dest = dest;
+    this.destName = name;
+    this.candidates = [];
+    MapView.setDestination(dest);
+    UI.showRoutePanel(name);
+    const from = GPS.last?.lngLat || CONFIG.defaultCenter;
+    try {
+      this.candidates = await Router.route(from, dest);
+      this.select(0);
+      UI.renderRouteOptions(this.candidates, 0);
+    } catch (e) {
+      UI.renderRouteOptions([], 0, e.message);
+    }
+  },
+
+  select(i) {
+    this.selected = i;
+    const r = this.candidates[i];
+    MapView.setRoute(r.geometry);
+    MapView.setAlternatives(this.candidates.filter((_, k) => k !== i).map((c) => c.geometry));
+    MapView.fitLine(r.geometry.coordinates);
+  },
+
+  cancelPreview() {
+    this.candidates = [];
+    MapView.setRoute(null);
+    MapView.setAlternatives([]);
+    MapView.setDestination(null);
+    UI.hideRoutePanel();
+    MapView.setFollowing(true);
+  },
+
+  start(route = this.candidates[this.selected]) {
+    if (!route) return;
+    this.prepare(route);
+    this.active = true;
+    this.candidates = [];
+    MapView.setAlternatives([]);
+    UI.hideRoutePanel();
+    UI.setNavigating(true);
+    MapView.setFollowing(true);
+    AudioFx.unlock();
+    AudioFx.speak(guide().start(this.destName, guide().minutes(Math.max(1, Math.round(route.duration / 60)))));
+    if (GPS.last) this.update(GPS.lastPosition());
+  },
+
+  prepare(route) {
+    this.route = route;
+    this.line = new Line(route.geometry.coordinates);
+    this.steps = route.legs.flatMap((l) => l.steps);
+    this.stepStarts = [];
+    let acc = 0;
+    for (const s of this.steps) { this.stepStarts.push(acc); acc += s.distance; }
+    // OSRM step distances and geometry length differ slightly; scale to geometry.
+    const k = acc > 0 ? this.line.length / acc : 1;
+    this.stepStarts = this.stepStarts.map((d) => d * k);
+
+    // Suffix sums of per-segment durations for an accurate remaining time.
+    const durs = route.legs.flatMap((l) => l.annotation?.duration || []);
+    this.segDur = durs.length === this.line.coords.length - 1 ? durs : null;
+    if (this.segDur) {
+      this.remDurSuffix = new Array(durs.length + 1).fill(0);
+      for (let i = durs.length - 1; i >= 0; i--) this.remDurSuffix[i] = this.remDurSuffix[i + 1] + durs[i];
+    }
+    this.segIdx = 0;
+    this.traveled = 0;
+    this.offCount = 0;
+    this.announced.clear();
+    this.match = null;
+    MapView.setRoute(route.geometry);
+    SpeedLimit.loadRoute(this.line);
+  },
+
+  update(pos) {
+    if (!this.active || this.rerouting) return;
+
+    // Snap to the route: search a window ahead of the last match, full scan if lost.
+    let n = this.line.nearest(pos.lngLat, this.segIdx - 3, this.segIdx + 80);
+    if (n.dist > 60) n = this.line.nearest(pos.lngLat);
+
+    // Off route: further than 25 m from the line, and further than the fix's own
+    // error radius (so a single noisy fix in a city canyon doesn't trigger it).
+    if (n.dist > Math.max(CONFIG.offRouteThresholdM, pos.accuracy || 0)) {
+      this.offCount++;
+      this.reroute(pos);
+    } else {
+      this.offCount = 0;
+    }
+    this.segIdx = n.i;
+    this.traveled = n.along;
+    // Map matching result, used to snap the drawn car onto the route.
+    this.match = { along: n.along, onRoute: this.offCount === 0 };
+
+    const remaining = Math.max(0, this.line.length - this.traveled);
+    const remainingSec = this.segDur
+      ? this.remDurSuffix[n.i] - n.t * this.segDur[n.i]
+      : remaining / Math.max(1, this.route.distance / this.route.duration);
+
+    // Current step k contains `traveled`; the maneuver to announce is k+1.
+    let k = 0;
+    while (k + 1 < this.steps.length && this.stepStarts[k + 1] <= this.traveled) k++;
+    const next = this.steps[k + 1] || this.steps[this.steps.length - 1];
+    const distToManeuver = (this.stepStarts[k + 1] ?? this.line.length) - this.traveled;
+    const after = this.steps[k + 2] && next.distance < 150 ? this.steps[k + 2] : null;
+    this.nextManeuverAt = this.stepStarts[k + 1] ?? this.line.length;
+
+    UI.setStreet(this.steps[k].name || this.steps[k].ref || this.destName);
+    UI.renderNav({ step: next, distance: distToManeuver, then: after, remaining, remainingSec });
+    this.announce(k + 1, next, distToManeuver, pos.speedKmh);
+
+    // Real GPS: within 25 m counts as arrived. The simulator drives right up to the end.
+    if (remaining < (Sim.active ? 2 : 25)) this.arrive();
+  },
+
+  /** Voice prompts: early (speed-dependent), near, and at the maneuver. */
+  announce(idx, step, dist, kmh) {
+    const text = instructionFor(step);
+    const lower = text.charAt(0).toLowerCase() + text.slice(1);
+    const early = kmh > 80 ? 1500 : kmh > 50 ? 800 : 400;
+    const say = (tag, phrase) => {
+      const key = `${idx}:${tag}`;
+      if (this.announced.has(key)) return;
+      this.announced.add(key);
+      AudioFx.speak(phrase);
+    };
+    if (dist <= early && dist > early * 0.55 && dist > 250) say('early', guide().inDist(spokenDistance(dist), lower));
+    else if (dist <= 220 && dist > 70) say('near', guide().inDist(spokenDistance(dist), lower));
+    else if (dist <= 40 && step.maneuver.type !== 'arrive') say('now', text);
+  },
+
+  async reroute(pos) {
+    if (this.rerouting || Date.now() - this.lastReroute < CONFIG.rerouteCooldownMs) return;
+    this.lastReroute = Date.now();
+    this.rerouting = true;
+    UI.toast('Rerouting…');
+    AudioFx.speak(guide().reroute);
+    try {
+      const routes = await Router.route(pos.lngLat, this.dest, { heading: pos.heading });
+      if (this.active) {
+        this.prepare(routes[0]);
+        if (Sim.active) Sim.start(routes[0]);
+      }
+    } catch (e) {
+      UI.toast('Could not reroute: ' + e.message);
+    } finally {
+      this.rerouting = false;
+    }
+  },
+
+  arrive() {
+    AudioFx.play('arrive');
+    AudioFx.speak(guide().arrived);
+    UI.toast(`You have arrived at ${this.destName}`, 5000);
+    this.stop(true, { keepDestination: true });
+    // The beacon stays put in its own colours, pulses a moment, then fades away.
+    const token = MapView.markArrived();
+    setTimeout(() => { if (MapView.destToken === token) MapView.fadeOutDestination(); }, 1500);
+  },
+
+  stop(silent = false, { keepDestination = false } = {}) {
+    this.active = false;
+    this.route = null;
+    this.match = null;
+    SpeedLimit.clearRoute();
+    MapView.setRoute(null);
+    MapView.setAlternatives([]);
+    if (!keepDestination) MapView.setDestination(null);
+    UI.setNavigating(false);
+    if (Sim.active) Sim.stop(true);
+    if (!silent) UI.toast('Navigation ended');
+  },
+};
+
+/* ==========================================================================
+   HUD: mirrored heads-up display
+   ========================================================================== */
+/* ==========================================================================
+   Install: PWA service worker + "Install app" button in Settings.
+   Chrome / Samsung Internet / Edge fire `beforeinstallprompt`, which we hold
+   on to and replay from the button (one tap). iOS Safari and Firefox have no
+   prompt API, so the button shows the browser's own add-to-home-screen steps.
+   ========================================================================== */
+const Install = {
+  deferred: null,
+  TEXT: {
+    en: {
+      install: 'Install app', installed: 'Installed', how: 'How to install',
+      note: 'Install MapNav on your home screen to use it full-screen like a native app.',
+      done: 'MapNav is installed — open it from your home screen.',
+      thanks: 'MapNav installed', dismissed: 'Installation cancelled',
+      ios: ['Tap the Share button <b>⬆︎</b> in Safari’s toolbar', 'Choose <b>Add to Home Screen</b>', 'Tap <b>Add</b>'],
+      samsung: ['Tap the menu <b>≡</b>', 'Choose <b>Add page to</b> → <b>Home screen</b>'],
+      other: ['Open the browser menu <b>⋮</b>', 'Choose <b>Install app</b> or <b>Add to Home screen</b>'],
+      desktop: ['Click the install icon <b>⊕</b> at the right of the address bar', 'or open the menu <b>⋮</b> → <b>Install MapNav</b>'],
+    },
+    nl: {
+      install: 'App downloaden', installed: 'Geïnstalleerd', how: 'Zo installeer je de app',
+      note: 'Zet MapNav op je beginscherm en gebruik het schermvullend, net als een echte app.',
+      done: 'MapNav is geïnstalleerd — open de app vanaf je beginscherm.',
+      thanks: 'MapNav geïnstalleerd', dismissed: 'Installatie geannuleerd',
+      ios: ['Tik op de deelknop <b>⬆︎</b> in de werkbalk van Safari', 'Kies <b>Zet op beginscherm</b>', 'Tik op <b>Voeg toe</b>'],
+      samsung: ['Tik op het menu <b>≡</b>', 'Kies <b>Pagina toevoegen aan</b> → <b>Startscherm</b>'],
+      other: ['Open het browsermenu <b>⋮</b>', 'Kies <b>App installeren</b> of <b>Toevoegen aan startscherm</b>'],
+      desktop: ['Klik op het installatie-icoon <b>⊕</b> rechts in de adresbalk', 'of open het menu <b>⋮</b> → <b>MapNav installeren</b>'],
+    },
+  },
+
+  t() { return this.TEXT[Settings.get('voiceLang').slice(0, 2)] || this.TEXT.en; },
+  standalone() { return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; },
+  platform() {
+    const ua = navigator.userAgent;
+    if (/iphone|ipad|ipod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return 'ios';
+    if (/SamsungBrowser/i.test(ua)) return 'samsung';
+    return /android|mobile/i.test(ua) ? 'other' : 'desktop';
+  },
+
+  init() {
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();           // keep Chrome's mini-infobar away; we prompt from the button instead
+      this.deferred = e;
+      this.render();
+    });
+    window.addEventListener('appinstalled', () => {
+      this.deferred = null;
+      this.render();
+      UI.toast(this.t().thanks);
+    });
+    window.matchMedia('(display-mode: standalone)').addEventListener?.('change', () => this.render());
+    Bus.on('setting', ({ key }) => { if (key === 'voiceLang') this.render(); });
+    $('#btn-install').addEventListener('click', () => this.install());
+    this.render();
+    this.registerWorker();
+  },
+
+  registerWorker() {
+    if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
+    const register = () => navigator.serviceWorker.register('service-worker.js').catch((err) => console.warn('Service worker:', err));
+    if (document.readyState === 'complete') register();
+    else window.addEventListener('load', register, { once: true });
+  },
+
+  async install() {
+    if (this.deferred) {
+      const prompt = this.deferred;
+      this.deferred = null;
+      prompt.prompt();
+      const { outcome } = await prompt.userChoice;
+      if (outcome !== 'accepted') UI.toast(this.t().dismissed);
+      this.render();
+      return;
+    }
+    $('#install-steps').classList.toggle('hidden');
+    this.render();
+  },
+
+  render() {
+    const t = this.t(), installed = this.standalone(), btn = $('#btn-install'), steps = $('#install-steps');
+    $('#install-note').textContent = installed ? t.done : t.note;
+    $('#install-label').textContent = installed ? t.installed : t.install;
+    btn.disabled = installed;
+    btn.title = this.deferred || installed ? '' : t.how;
+    steps.innerHTML = t[this.platform()].map((s) => `<li>${s}</li>`).join('');
+    if (installed) steps.classList.add('hidden');
+  },
+};
+
+const HUD = {
+  el: null,
+  init() {
+    this.el = $('#hud');
+    this.el.addEventListener('click', () => Settings.set('hud', false));
+    this.toggle(Settings.get('hud'));
+  },
+  get on() { return !this.el.classList.contains('hidden'); },
+  toggle(on) {
+    this.el.classList.toggle('hidden', !on);
+    if (on) UI.toast('HUD mode: place the phone under the windshield. Tap to exit.', 4000);
+  },
+  update({ limit, over, navText }) {
+    if (!this.on) return;
+    const sign = $('#hud-limit');
+    sign.className = 'limit-sign' + (limit.none ? ' none' : limit.value == null ? ' unknown' : '');
+    sign.firstElementChild.textContent = limit.value ?? '–';
+    this.el.classList.toggle('overspeed', over);
+    $('#hud-nav').textContent = navText || '';
+  },
+};
+
+/* ==========================================================================
+   UI: DOM wiring and rendering
+   ========================================================================== */
+const UI = {
+  lastOverChime: 0,
+  navText: '',
+  shownSpeed: -1,
+  chromeHidden: false,
+  chromeHoldUntil: 0,
+  mobileQuery: window.matchMedia('(max-width: 760px)'),
+
+  init() {
+    // Search
+    const input = $('#search-input');
+    input.addEventListener('input', () => {
+      $('#search-clear').classList.toggle('hidden', !input.value);
+      Search.onInput(input.value);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && Search.results[0]) this.chooseResult(Search.results[0]);
+      if (e.key === 'Escape') { input.blur(); this.renderResults([]); }
+    });
+    $('#search-clear').addEventListener('click', () => {
+      input.value = '';
+      $('#search-clear').classList.add('hidden');
+      this.renderResults([]);
+      input.focus();
+    });
+
+    // Floating controls
+    $('#btn-recenter').addEventListener('click', () => MapView.setFollowing(true));
+    $$('.cam-modes [data-cam]').forEach((b) => b.addEventListener('click', () => {
+      MapView.setMode(b.dataset.cam);
+      if (!MapView.following) MapView.setFollowing(true);
+    }));
+    $('#btn-theme').addEventListener('click', () => {
+      Settings.set('theme', MapView.night ? 'day' : 'night');
+      this.toast(`${MapView.night ? 'Night' : 'Day'} mode — choose "Automatic" in Settings to follow the sun`);
+    });
+    $('#btn-mute').addEventListener('click', () => Settings.set('audio', !Settings.get('audio')));
+    $('#btn-sim').addEventListener('click', () => this.toggleSim());
+    $('#btn-sim-speed').addEventListener('click', () => Sim.cycleScale());
+    $('#btn-cam-cycle').addEventListener('click', () => {
+      const order = ['2d', '3d', 'cu3d'];
+      MapView.setMode(order[(order.indexOf(MapView.mode) + 1) % order.length]);
+      if (!MapView.following) MapView.setFollowing(true);
+    });
+    $('#btn-test-voice').addEventListener('click', () => { AudioFx.unlock(); Voice.speak(guide().sample); });
+
+    // Navigation
+    $('#route-close').addEventListener('click', () => Nav.cancelPreview());
+    $('#btn-start-nav').addEventListener('click', () => Nav.start());
+    $('#btn-sim-route').addEventListener('click', () => { const r = Nav.candidates[Nav.selected]; Nav.start(r); Sim.start(r); });
+    $('#btn-end-nav').addEventListener('click', () => Nav.stop());
+
+    // Settings drawer
+    $('#btn-settings').addEventListener('click', () => this.openModal('#settings-panel'));
+    $('#gps-chip').addEventListener('click', () => this.openModal('#settings-panel', '.gps-panel'));
+    this.bindSettings();
+
+    $$('[data-close]').forEach((b) => b.addEventListener('click', () => this.closeModal(b.closest('.modal, .drawer'))));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') $$('.drawer:not(.hidden)').forEach((m) => this.closeModal(m));
+    });
+
+    // Specular highlight following the pointer (only where hover exists).
+    if (window.matchMedia('(hover: hover)').matches) {
+      document.addEventListener('pointermove', (e) => {
+        const g = e.target.closest?.('.glass');
+        if (!g) return;
+        const r = g.getBoundingClientRect();
+        g.style.setProperty('--mx', `${e.clientX - r.left}px`);
+        g.style.setProperty('--my', `${e.clientY - r.top}px`);
+      }, { passive: true });
+    }
+
+    document.addEventListener('pointerdown', () => AudioFx.unlock(), { once: true });
+    input.addEventListener('focus', () => {
+      this.revealChrome();
+      if (input.value.trim().length < 3) this.showHistory();
+    });
+    // Tapping anywhere outside the search bar closes its dropdown.
+    document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#topbar')) this.renderResults([]); });
+    this.mobileQuery.addEventListener?.('change', () => this.revealChrome());
+    window.addEventListener('resize', () => { if (MapView.cam) MapView.cam.pad = MapView.map.getPadding().top; });
+
+    setInterval(() => this.renderGpsPanel(), 1000);
+    this.syncControls();
+  },
+
+  bindSettings() {
+    for (const el of $$('[data-setting]')) {
+      const key = el.dataset.setting;
+      const v = Settings.get(key);
+      if (el.type === 'checkbox') el.checked = v; else el.value = String(v);
+      el.addEventListener(el.type === 'range' ? 'input' : 'change', () => {
+        Settings.set(key, el.type === 'checkbox' ? el.checked : 'num' in el.dataset ? Number(el.value) : el.value);
+      });
+    }
+    Bus.on('setting', ({ key, value }) => {
+      for (const el of $$(`[data-setting="${key}"]`)) {
+        if (el.type === 'checkbox') el.checked = value; else el.value = String(value);
+      }
+      if (key === 'theme') Theme.apply();
+      if (key === 'hud') HUD.toggle(value);
+      if (key === 'audio') { this.syncControls(); if (!value) window.speechSynthesis?.cancel(); }
+      if (key === 'cameraMode') MapView.setMode(value);
+      if (key === 'lup') {
+        MapView.setParkingVisible(value);
+        if (value) Parking.ensure(GPS.last?.lngLat || MapView.map.getCenter().toArray());
+      }
+      if (key === 'voiceLang' || key === 'voiceGender') { Settings.set('voiceName', ''); this.renderVoiceOptions(); }
+      if (key === 'voiceName') this.renderVoiceOptions();
+      if (['avoidTolls', 'avoidHighways', 'routePreference'].includes(key)) {
+        if (Nav.candidates.length && !Nav.active) Nav.preview(Nav.dest, Nav.destName);
+        else if (Nav.active) this.toast('Route options apply to your next route');
+      }
+    });
+  },
+
+  syncControls() {
+    if (!MapView.map) return;
+    $$('.cam-modes [data-cam]').forEach((b) => {
+      const on = b.dataset.cam === MapView.mode;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-checked', String(on));
+    });
+    $('#btn-theme use').setAttribute('href', MapView.night ? '#i-sun' : '#i-moon');
+    $('#btn-mute use').setAttribute('href', Settings.get('audio') ? '#i-volume' : '#i-mute');
+    $('#btn-mute').classList.toggle('active', !Settings.get('audio'));
+    $('#btn-sim use').setAttribute('href', Sim.active ? '#i-stop' : '#i-play');
+    $('#btn-sim').classList.toggle('active', Sim.active);
+    $('#btn-sim-speed').classList.toggle('hidden', !Sim.active);
+    $('#btn-sim-speed').textContent = `${Sim.scale}×`;
+    $('#btn-cam-cycle').textContent = MapView.mode.toUpperCase();
+  },
+
+  /** Fill the "System voice" list for the chosen language and explain the pick. */
+  renderVoiceOptions() {
+    const sel = $('#voice-name');
+    const G = guide();
+    const list = Voice.forLang(Settings.get('voiceLang'));
+    sel.innerHTML = '<option value="">Automatic</option>' + list.map((v) => {
+      const g = Voice.gender(v);
+      return `<option value="${Fmt.escape(v.name)}">${Fmt.escape(v.name)} (${v.lang}${g ? ', ' + g : ''})</option>`;
+    }).join('');
+    sel.value = list.some((v) => v.name === Settings.get('voiceName')) ? Settings.get('voiceName') : '';
+    const { voice, exact } = Voice.pick();
+    $('#voice-note').textContent = !('speechSynthesis' in window) ? 'Speech is not supported in this browser.'
+      : !voice ? `No ${G.name} voice is installed on this device; the browser default voice will be used.`
+      : exact ? `Using ${voice.name} (${voice.lang}).`
+      : `No ${Settings.get('voiceGender')} ${G.name} voice found; using ${voice.name} with adjusted pitch.`;
+  },
+
+  async toggleSim() {
+    AudioFx.unlock();
+    if (Sim.active) { Sim.stop(); if (Nav.active) Nav.stop(true); return; }
+    if (Nav.active) { Sim.start(Nav.route); return; }
+    if (Nav.candidates.length) { $('#btn-sim-route').click(); return; }
+
+    // No route yet: pick a destination 2.5–4 km away and drive there.
+    const from = GPS.last?.lngLat || CONFIG.defaultCenter;
+    const to = Geo.destination(from, Math.random() * 360, 2500 + Math.random() * 1500);
+    this.toast('Planning a demo drive…');
+    try {
+      const routes = await Router.route(from, to);
+      Nav.dest = to;
+      Nav.destName = await Search.reverse(to);
+      MapView.setDestination(to);
+      Nav.start(routes[0]);
+      Sim.start(routes[0]);
+    } catch (e) {
+      this.toast('Could not plan a demo route: ' + e.message);
+    }
+  },
+
+  /* ---------- mobile: auto-hide the search bar while driving ---------- */
+  updateChrome(kmh) {
+    const hide = this.mobileQuery.matches && kmh > 12 && MapView.following
+      && document.activeElement !== $('#search-input')
+      && $('#search-results').classList.contains('hidden')
+      && Date.now() > this.chromeHoldUntil;
+    if (hide === this.chromeHidden) return;
+    this.chromeHidden = hide;
+    const bar = $('#topbar');
+    bar.style.marginTop = hide ? `${-(bar.offsetHeight + 10)}px` : '';
+    bar.classList.toggle('tucked', hide);
+  },
+
+  revealChrome() {
+    this.chromeHoldUntil = Date.now() + 6000;
+    this.updateChrome(0);
+  },
+
+  /* ---------- modals ---------- */
+  openModal(sel, scrollTo) {
+    const el = typeof sel === 'string' ? $(sel) : sel;
+    el.classList.remove('hidden');
+    if (scrollTo) $(scrollTo, el)?.scrollIntoView({ block: 'center' });
+    this.renderGpsPanel();
+  },
+  closeModal(sel) {
+    const el = typeof sel === 'string' ? $(sel) : sel;
+    el?.classList.add('hidden');
+  },
+
+  toast(msg, life = 3600) {
+    const t = document.createElement('div');
+    t.className = 'toast glass';
+    t.style.setProperty('--life', `${life}ms`);
+    t.textContent = msg;
+    $('#toasts').appendChild(t);
+    setTimeout(() => t.remove(), life + 400);
+    while ($('#toasts').children.length > 3) $('#toasts').firstElementChild.remove();
+  },
+
+  /* ---------- search ---------- */
+  renderResults(results, { history = false } = {}) {
+    const ul = $('#search-results');
+    ul.innerHTML = '';
+    ul.classList.toggle('hidden', !results.length);
+    if (history && results.length) {
+      const head = document.createElement('li');
+      head.className = 'results-head';
+      head.innerHTML = '<span>Recent searches</span><button class="clear-history" type="button">Clear history</button>';
+      head.querySelector('button').addEventListener('click', () => {
+        History.clear();
+        this.renderResults([]);
+        this.toast('Search history cleared');
+      });
+      ul.appendChild(head);
+    }
+    for (const r of results) {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      if (history) li.className = 'history';
+      li.innerHTML = `<svg class="ico"><use href="#${history ? 'i-clock' : 'i-pin'}"/></svg>
+        <div class="r-text"><div class="r-title">${Fmt.escape(r.title)}</div><div class="r-sub">${Fmt.escape(r.subtitle)}</div></div>
+        <div class="r-dist">${Fmt.distance(r.dist)}</div>`;
+      li.addEventListener('click', () => this.chooseResult(r));
+      ul.appendChild(li);
+    }
+  },
+
+  /** Dropdown of recent destinations (shown when the search box is focused). */
+  showHistory() {
+    const c = GPS.last?.lngLat || CONFIG.defaultCenter;
+    this.renderResults(History.items().map((h) => ({ ...h, dist: Geo.distance(c, h.lngLat) })), { history: true });
+  },
+
+  chooseResult(r) {
+    History.add(r);
+    $('#search-input').value = r.title;
+    $('#search-input').blur();
+    this.renderResults([]);
+    Nav.preview(r.lngLat, r.title);
+  },
+
+  async pickDestination(lngLat) {
+    const name = await Search.reverse(lngLat);
+    History.add({ title: name, subtitle: 'Dropped pin', lngLat });
+    Nav.preview(lngLat, name);
+  },
+
+  /* ---------- route panel ---------- */
+  showRoutePanel(name) {
+    $('#dest-name').textContent = name;
+    $('#route-options').innerHTML = '<div class="muted">Calculating routes…</div>';
+    $('#btn-start-nav').disabled = true;
+    $('#btn-sim-route').disabled = true;
+    $('#route-panel').classList.remove('hidden');
+    document.body.classList.add('previewing');
+  },
+
+  hideRoutePanel() {
+    $('#route-panel').classList.add('hidden');
+    document.body.classList.remove('previewing');
+  },
+
+  renderRouteOptions(routes, selected, error) {
+    const box = $('#route-options');
+    box.innerHTML = '';
+    if (error || !routes.length) {
+      box.innerHTML = `<div class="muted">No route found${error ? ': ' + Fmt.escape(error) : ''}</div>`;
+      return;
+    }
+    const fastest = Math.min(...routes.map((r) => r.duration));
+    const shortest = Math.min(...routes.map((r) => r.distance));
+    routes.forEach((r, i) => {
+      const b = document.createElement('button');
+      b.className = 'route-opt' + (i === selected ? ' selected' : '');
+      const tag = r.duration === fastest ? 'Fastest' : r.distance === shortest ? 'Shortest' : '';
+      const via = r.legs[0]?.summary ? `via ${r.legs[0].summary}` : '';
+      b.innerHTML = `<div><div class="ro-time">${Fmt.duration(r.duration)}</div>
+        <div class="ro-meta">${Fmt.distance(r.distance)} ${via ? '· ' + Fmt.escape(via) : ''}</div></div>
+        ${tag ? `<span class="ro-tag">${tag}</span>` : ''}`;
+      b.addEventListener('click', () => {
+        Nav.select(i);
+        $$('.route-opt', box).forEach((x, k) => x.classList.toggle('selected', k === i));
+      });
+      box.appendChild(b);
+    });
+    $('#btn-start-nav').disabled = false;
+    $('#btn-sim-route').disabled = false;
+  },
+
+  /* ---------- navigation ---------- */
+  setNavigating(on) {
+    document.body.classList.toggle('navigating', on);
+    $('#nav-banner').classList.toggle('hidden', !on);
+    $('#trip-bar').classList.toggle('hidden', !on);
+    if (!on) {
+      this.navText = '';
+      $('#search-input').value = '';
+      $('#search-clear').classList.add('hidden');
+    }
+  },
+
+  renderNav({ step, distance, then, remaining, remainingSec }) {
+    const text = instructionFor(step);
+    $('#turn-svg').innerHTML = turnIcon(step.maneuver);
+    $('#nav-distance').textContent = Fmt.distance(Math.max(0, distance));
+    // Street name in bold so it reads at a glance.
+    const name = step.name || step.ref || '';
+    const html = Fmt.escape(text);
+    $('#nav-instruction').innerHTML = name ? html.replace(Fmt.escape(name), `<strong>${Fmt.escape(name)}</strong>`) : html;
+    $('#nav-then').classList.toggle('hidden', !then);
+    if (then) $('#then-svg').innerHTML = turnIcon(then.maneuver);
+
+    $('#trip-eta').textContent = Fmt.clock(new Date(Date.now() + remainingSec * 1000));
+    const min = Math.round(remainingSec / 60);
+    $('#trip-time').textContent = min >= 60 ? `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}` : String(min);
+    $('#trip-time-unit').textContent = min >= 60 ? 'h:min' : 'min';
+    $('#trip-dist').textContent = remaining < 1000 ? Math.round(remaining) : (remaining / 1000).toFixed(remaining < 10000 ? 1 : 0);
+    $('#trip-dist-unit').textContent = remaining < 1000 ? 'm' : 'km';
+    this.navText = `${Fmt.distance(Math.max(0, distance))} · ${text}`;
+  },
+
+  /** Every frame while snapped: maneuver distance, approach bar and remaining distance. */
+  tickNav(along) {
+    const d = Math.max(0, Nav.nextManeuverAt - along);
+    const dText = Fmt.distance(d);
+    const el = $('#nav-distance');
+    if (el.textContent !== dText) el.textContent = dText;
+    $('#nav-progress').style.width = `${(1 - clamp(d / 400, 0, 1)) * 100}%`;
+    const rem = Math.max(0, Nav.line.length - along);
+    const remText = rem < 1000 ? String(Math.round(rem / 10) * 10) : (rem / 1000).toFixed(rem < 10000 ? 1 : 0);
+    const remEl = $('#trip-dist');
+    if (remEl.textContent !== remText) { remEl.textContent = remText; $('#trip-dist-unit').textContent = rem < 1000 ? 'm' : 'km'; }
+  },
+
+  setStreet(name) {
+    const el = $('#dash-street');
+    if (el.textContent !== name) el.textContent = name;
+  },
+
+  /* ---------- speed + limit ---------- */
+
+  /** Every frame: the smoothed speed. DOM is touched only when the integer changes. */
+  renderSpeedValue(kmh, force = false) {
+    const v = Math.round(kmh);
+    if (v === this.shownSpeed && !force) return;
+    this.shownSpeed = v;
+    $('#speed-value').textContent = v;
+    if (HUD.on) $('#hud-speed').textContent = v;
+    // Ring: full scale = 130% of the limit (or 60 km/h when unknown); amber above
+    // the limit, red beyond the over-speed tolerance.
+    const limit = SpeedLimit.current.value;
+    const full = Math.max(60, (limit || 50) * 1.3);
+    const arc = $('#speed-arc');
+    arc.style.strokeDashoffset = (207.3 * (1 - clamp(v / full, 0, 1))).toFixed(1);
+    arc.classList.toggle('over', limit != null && v > limit + Settings.get('overspeedTolerance'));
+    arc.classList.toggle('near', limit != null && v > limit && v <= limit + Settings.get('overspeedTolerance'));
+  },
+
+  /** On every fix: over-speed state and chime. */
+  checkOverspeed(kmh) {
+    const limit = SpeedLimit.current;
+    const over = limit.value != null && kmh > limit.value + Settings.get('overspeedTolerance');
+    $('#dash').classList.toggle('overspeed', over);
+    if (over && Settings.get('overspeedSound') && Date.now() - this.lastOverChime > 6000) {
+      this.lastOverChime = Date.now();
+      AudioFx.play('chime');
+    }
+    HUD.update({ limit, over, navText: Nav.active ? this.navText : '' });
+  },
+
+  renderLimit(limit, animate) {
+    const sign = $('#limit-sign');
+    sign.className = 'limit-sign' + (limit.none ? ' none' : limit.value == null ? ' unknown' : '') + (limit.value >= 100 ? ' wide' : '');
+    $('#limit-value').textContent = limit.value ?? '–';
+    const why = { conditional: ' (time-limited zone)', continuation: ' (same street)', zone: ' (zone)' }[limit.source]
+      || (/^BE/.test(limit.source || '') ? ' (Belgian default for this road)' : '');
+    sign.title = limit.none ? 'No speed limit' : limit.value ? `Speed limit ${limit.value} km/h${why}` : 'Speed limit unknown';
+    if (animate && limit.value != null) {
+      sign.classList.remove('bump');
+      void sign.offsetWidth;   // restart the animation
+      sign.classList.add('bump');
+    }
+  },
+
+  /* ---------- GPS ---------- */
+  setGpsLabel(text) { $('#gps-label').textContent = text; },
+
+  renderGpsChip() {
+    const chip = $('#gps-chip');
+    const level = GPS.signalLevel();
+    chip.querySelector('.bars').dataset.level = level;
+    chip.classList.remove('good', 'fair', 'poor', 'sim');
+    if (GPS.mode === 'sim') { chip.classList.add('sim'); this.setGpsLabel(`SIM ${Sim.scale}×`); }
+    else if (GPS.mode === 'default') { chip.classList.add('poor'); this.setGpsLabel('DEMO'); }
+    else if (GPS.mode === 'gps') {
+      chip.classList.add(level >= 3 ? 'good' : level === 2 ? 'fair' : 'poor');
+      this.setGpsLabel(GPS.accuracy != null ? `±${Math.round(GPS.accuracy)} m` : 'GPS');
+    }
+  },
+
+  renderGpsPanel() {
+    this.renderGpsChip();
+    if ($('#settings-panel').classList.contains('hidden')) return;
+    const level = GPS.signalLevel();
+    $('#gps-source').textContent = { gps: 'Device GPS', sim: 'Simulation', default: 'Demo location', none: 'Waiting…' }[GPS.mode];
+    $('#gps-signal').textContent = GPS.mode === 'sim' ? 'Simulated' : ['No fix', 'Poor', 'Fair', 'Good', 'Excellent'][level];
+    $('#gps-accuracy').textContent = GPS.accuracy != null ? `±${Math.round(GPS.accuracy)} m` : '–';
+    $('#gps-age').textContent = GPS.mode === 'sim' ? 'live' : GPS.last ? `${Math.max(0, Math.round((Date.now() - GPS.last.t) / 1000))} s ago` : '–';
+    $('#gps-coords').textContent = GPS.last ? `${GPS.last.lngLat[1].toFixed(5)}, ${GPS.last.lngLat[0].toFixed(5)}` : '–';
+    const size = GPS.accuracy != null ? clamp(GPS.accuracy, 4, 80) : 20;
+    $('#gps-ring-dot').style.width = $('#gps-ring-dot').style.height = `${size}px`;
+  },
+};
+
+/* ==========================================================================
+   Boot
+   ========================================================================== */
+function onPosition(pos) {
+  const first = !onPosition.seen;
+  onPosition.seen = true;
+  if (first) Theme.apply();   // sun position depends on where we are
+  Nav.update(pos);
+  // Snap the drawn car onto the route while we are on it (map matching).
+  const snap = Nav.active && Nav.match?.onRoute ? { line: Nav.line, along: Nav.match.along } : null;
+  if (pos.source !== 'sim') Motion.pushFix(pos, snap);   // the simulator feeds Motion per frame
+  MapView.setAccuracy(pos.lngLat, pos.source === 'gps' && !snap && pos.accuracy > 15 ? pos.accuracy : null);
+  SpeedLimit.ensureArea(pos.lngLat, pos.heading, pos.speedKmh);
+  Parking.ensure(pos.lngLat);
+  UI.checkOverspeed(pos.speedKmh);
+  UI.updateChrome(pos.speedKmh);
+  UI.renderGpsChip();
+}
+
+async function requestLocation() {
+  // Skip our prompt if the browser already knows the answer.
+  let state = 'prompt';
+  try { state = (await navigator.permissions?.query({ name: 'geolocation' }))?.state || 'prompt'; } catch { /* Safari */ }
+  if (state === 'granted') return GPS.start();
+  if (state === 'denied') return GPS.useDefault('Location is blocked for this site');
+
+  UI.openModal('#perm-modal');
+  $('#perm-allow').addEventListener('click', () => { AudioFx.unlock(); UI.closeModal('#perm-modal'); GPS.start(); }, { once: true });
+  $('#perm-demo').addEventListener('click', () => { AudioFx.unlock(); UI.closeModal('#perm-modal'); GPS.useDefault('Demo mode'); }, { once: true });
+}
+
+function boot() {
+  if (!window.maplibregl) {
+    document.body.innerHTML = '<p style="padding:24px">Could not load MapLibre GL. Check your internet connection.</p>';
+    return;
+  }
+  Settings.load();
+  document.documentElement.dataset.theme = Theme.isNight() ? 'dark' : 'light';
+  MapView.init();
+  UI.init();
+  HUD.init();
+  Install.init();
+  Voice.init();
+  UI.renderVoiceOptions();
+  UI.renderLimit(SpeedLimit.current, false);
+  Bus.on('position', onPosition);
+  MapView.map.once('load', () => Theme.start());
+  Renderer.start();
+  requestLocation();
+}
+
+document.addEventListener('DOMContentLoaded', boot);
+</script>
+</body>
+</html>
